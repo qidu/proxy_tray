@@ -1,0 +1,6 @@
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# Staged sidecar binary: built from model_proxy_v3, copied in by scripts/stage-sidecar.sh
+src-tauri/binaries/

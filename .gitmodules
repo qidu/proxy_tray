@@ -1,0 +1,4 @@
+[submodule "submodules/model_proxy_v3"]
+	path = submodules/model_proxy_v3
+	url = git@github.com:qidu/model_proxy_v3.git
+	branch = feature/targeting_failover

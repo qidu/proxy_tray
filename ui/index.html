@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>model_proxy_v3</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <span id="dot" class="dot stopped"></span>
+      <div>
+        <strong id="headline">Stopped</strong>
+        <span id="endpoint" class="muted"></span>
+      </div>
+    </header>
+
+    <p id="error" class="error" hidden></p>
+
+    <section class="stats">
+      <div><span id="active">—</span><label>active requests</label></div>
+      <div><span id="tokens">—</span><label>tokens (24h)</label></div>
+      <div><span id="models">—</span><label>models</label></div>
+    </section>
+
+    <section class="row">
+      <button id="toggle">Start</button>
+      <button id="restart">Restart</button>
+      <button id="reload">Reload config</button>
+      <button id="dashboard">Open dashboard</button>
+    </section>
+
+    <section class="row">
+      <button id="export-pi">Export for pi</button>
+      <button id="export-openclaw">Export for openclaw</button>
+    </section>
+
+    <section>
+      <h2>Config</h2>
+      <code id="config-path" class="path"></code>
+      <p id="config-note" class="note" hidden></p>
+      <p id="reload-error" class="error" hidden></p>
+    </section>
+
+    <section>
+      <h2>Export output</h2>
+      <pre id="export-output">No export yet.</pre>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>

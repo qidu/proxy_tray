@@ -1,0 +1,22 @@
+[package]
+name = "proxy-tray"
+version = "0.1.0"
+description = "Tray app that supervises the model-proxy-v3 SEA binary over JSON-RPC"
+edition = "2021"
+
+[lib]
+name = "proxy_tray_lib"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `image-png` is not a default feature; the tray icons are decoded at runtime
+# from PNG bytes, so it must be requested explicitly.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
