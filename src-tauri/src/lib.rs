@@ -256,7 +256,7 @@ fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
     let (icon, label, error) = match &status {
         ProxyStatus::Running => {
             let label = match &version {
-                Some(version) => format!("Running on :{} · v{}", state.port, version),
+                Some(version) => format!("Running on :{} · Ver {}", state.port, version),
                 None => format!("Running on :{}", state.port),
             };
             (ICON_RUNNING, label, None)
@@ -542,13 +542,22 @@ async fn run_export(app: &AppHandle, kind: &str) {
     let mut terminated = false;
     while let Some(event) = events.recv().await {
         match event {
+            // The shell plugin reads line-by-line and keeps the terminator, so
+            // each chunk already ends in `\n` — adding another would double the
+            // spacing. Only terminate the final partial line (EOF, no newline).
             CommandEvent::Stdout(bytes) => {
-                stdout.push_str(&String::from_utf8_lossy(&bytes));
-                stdout.push('\n');
+                let text = String::from_utf8_lossy(&bytes);
+                stdout.push_str(&text);
+                if !text.ends_with('\n') {
+                    stdout.push('\n');
+                }
             }
             CommandEvent::Stderr(bytes) => {
-                stderr.push_str(&String::from_utf8_lossy(&bytes));
-                stderr.push('\n');
+                let text = String::from_utf8_lossy(&bytes);
+                stderr.push_str(&text);
+                if !text.ends_with('\n') {
+                    stderr.push('\n');
+                }
             }
             CommandEvent::Error(err) => stderr.push_str(&format!("{err}\n")),
             CommandEvent::Terminated(payload) => {

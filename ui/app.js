@@ -46,7 +46,7 @@ function renderStatus(status) {
   $('dot').className = `dot ${error || reloadError ? 'error' : running ? 'running' : 'stopped'}`;
   $('headline').textContent = running ? `Running on :${status.port}` : 'Stopped';
   $('endpoint').textContent = [
-    status && status.version ? `v${status.version}` : null,
+    status && status.version ? `Ver ${status.version}` : null,
     status && status.pid ? `pid ${status.pid}` : null,
     status && status.uptimeMs !== undefined ? `up ${Math.round(status.uptimeMs / 1000)}s` : null,
   ]
