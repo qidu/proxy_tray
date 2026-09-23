@@ -20,3 +20,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time"] }
+
+# Windows-only: a start ensures a Defender inbound rule for the sidecar, so a
+# tray-launched proxy is reachable from other hosts (src/firewall.rs, doc §6).
+# Not compiled on other platforms.
+[target.'cfg(windows)'.dependencies]
+windows_firewall = "0.8.3"

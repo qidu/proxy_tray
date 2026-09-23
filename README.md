@@ -17,28 +17,74 @@ The design this implements is `docs/design_tauri_tray.md` in the
 | `scripts/make-icons.mjs` | regenerates `src-tauri/icons/*.png` |
 | `src-tauri/` | the Rust core: tray, supervisor, JSON-RPC client |
 
-## Build order
+## How to build
 
-The tray ships the proxy, so the proxy must be built first.
+The tray ships the proxy, so the proxy must be built first. Both are built from
+source on their own platform — nothing is cross-compiled.
 
-1. Build the SEA binary inside the submodule:
+### Dependencies
 
-   ```sh
-   cd model_proxy_v3
-   npm ci
-   npx --yes --package=node@26 node scripts/build-sea.js
-   ```
+| Tool | macOS | Windows |
+| --- | --- | --- |
+| Node.js | any modern Node for `npm ci` | same |
+| Rust | `rustup` (host target) | `rustup default stable-x86_64-pc-windows-msvc` — MSVC, not GNU |
+| C/C++ toolchain | Xcode Command Line Tools: `xcode-select --install` | Visual Studio Build Tools, "Desktop development with C++" (supplies `link.exe`) |
+| Tauri CLI | `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | same |
+| WebView2 | not needed (WKWebView) | preinstalled on Win 10/11, else the Evergreen bootstrapper |
 
-   Homebrew's Node cannot build a SEA ("SEA support is compiled out"), hence the
-   `npx --package=node@26` wrapper.
+The SEA build needs an **official** Node (nodejs.org, nvm,
+`actions/setup-node`): the binary is a copy of the Node that built it, and
+Homebrew's Node is a thin launcher with SEA compiled out. Both sequences below
+therefore build under `npx --yes --package=node@26`, which fetches an official
+Node without touching the system install.
 
-2. Stage it under the target-triple name `externalBin` requires:
+### macOS
 
-   ```sh
-   bash scripts/stage-sidecar.sh
-   ```
+```sh
+# 1. Proxy: install deps and build the SEA binary.
+cd model_proxy_v3
+npm ci
+npx --yes --package=node@26 node scripts/build-sea.js   # -> dist/model-proxy-v3-macos-<arch>
 
-3. `cargo check` (or `tauri dev` / `tauri build`, which need the Tauri CLI).
+# 2. Tray: stage the sidecar under the target-triple name externalBin needs.
+cd ..
+bash scripts/stage-sidecar.sh
+
+# 3. Tray: build (or `cargo tauri dev` for a dev run).
+cargo tauri build
+```
+
+### Windows
+
+Run every step on Windows — SEA embeds a copy of the Node that built it, so a
+`dist/model-proxy-v3-macos-x64` is useless here.
+
+```
+:: 1. Clone with the submodule (the file transport needs enabling; see Cloning).
+git -c protocol.file.allow=always submodule update --init
+
+:: 2. Proxy: install deps and build the SEA binary.
+cd model_proxy_v3
+npm ci
+npx --yes --package=node@26 node scripts\build-sea.js   :: -> dist\model-proxy-v3-win.exe
+
+:: 3. Stage the sidecar by hand — stage-sidecar.sh is bash and looks for the
+::    macOS build by name. The triple AND the .exe suffix are both mandatory.
+rustc --print host-tuple                                :: x86_64-pc-windows-msvc
+copy model_proxy_v3\dist\model-proxy-v3-win.exe ^
+     src-tauri\binaries\model-proxy-v3-x86_64-pc-windows-msvc.exe
+
+:: 4. Generate the Windows icon. Not optional: tauri-build writes the
+::    executable's resource from src-tauri\icons\icon.ico and fails without it.
+node scripts\make-icons.mjs
+
+:: 5. From the project root (the directory holding src-tauri\), not src-tauri\.
+cargo tauri build
+```
+
+Before step 5, apply the three `tauri.conf.json` edits under
+[Config edits](#config-edits) below — the macOS defaults point at macOS paths
+and the wrong icon set.
 
 ### The `externalBin` naming rule
 
@@ -142,79 +188,20 @@ git -c protocol.file.allow=always submodule update --init
 
 ## Windows
 
-The tray ships the proxy, so a Windows build starts by producing a Windows SEA
-binary. SEA embeds a copy of the Node that built it, so it **cannot
-cross-compile**: a `dist/model-proxy-v3-macos-x64` is useless here, and the
-whole sequence below has to run on Windows.
+Run the whole sequence under [How to build](#how-to-build) on Windows — SEA
+embeds a copy of the Node that built it, so it **cannot cross-compile**. What
+follows is Windows-specific.
 
-### Prerequisites
-
-| Need | Why |
-| --- | --- |
-| Rust with the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`) | Tauri's core links against MSVC, not the GNU target |
-| Visual Studio Build Tools, "Desktop development with C++" workload | supplies the MSVC linker (`link.exe`) `rustc` shells out to |
-| WebView2 runtime | the window's webview; preinstalled on Win 10/11, else the Evergreen bootstrapper |
-| Tauri CLI: `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | provides `cargo tauri`; without it you get `error: no such command "tauri"` |
-| Node for the SEA build | must be official/self-contained; `npx --yes --package=node@26 node scripts\build-sea.js` supplies one without touching the system Node |
-
-### Steps
-
-1. Clone with the submodule, from `proxy_tray`:
-
-   ```
-   git -c protocol.file.allow=always submodule update --init
-   ```
-
-   `.gitmodules` points at a local relative path, so the `file` transport needs
-   enabling (see Cloning).
-
-2. Build the SEA binary inside the submodule:
-
-   ```
-   cd model_proxy_v3
-   npm ci
-   npx --yes --package=node@26 node scripts\build-sea.js
-   ```
-
-   The output is `model_proxy_v3\dist\model-proxy-v3-win.exe`. `build-sea.js`
-   already quotes for cmd.exe (`quoteForCmd`), so `npx.cmd`, the esbuild banner
-   and paths with spaces all survive.
-
-3. Stage it by hand. `scripts/stage-sidecar.sh` is bash and looks for the macOS
-   build by name, so it does not run here — do what it does:
-
-   ```
-   rustc --print host-tuple      :: x86_64-pc-windows-msvc
-   copy model_proxy_v3\dist\model-proxy-v3-win.exe ^
-        src-tauri\binaries\model-proxy-v3-x86_64-pc-windows-msvc.exe
-   ```
-
-   The triple **and** the `.exe` suffix are both mandatory: `externalBin`
-   appends them itself, so the staged file must already carry them (see the
-   `externalBin` naming rule above). `cargo check` fails without this file —
-   `build.rs` copies it.
-
-4. Generate the icons:
-
-   ```
-   node scripts\make-icons.mjs
-   ```
-
-   This is **not** optional on Windows. `tauri-build` generates the executable's
-   Windows resource from `src-tauri\icons\icon.ico` and fails with
-   `icons/icon.ico not found` without it; the script writes it (16/32/48/256,
-   the same ring as `icon.png`). The macOS build does not use the `.ico`.
-
-5. From the **project root** (the directory that holds `src-tauri/`), not
-   `src-tauri/` itself:
-
-   ```
-   cargo tauri build
-   ```
-
-   `cargo tauri` locates `src-tauri` by searching the cwd and then its
-   children — never its parents — so run it from the root, where the checkout
-   sits one level down.
+- **The icon is mandatory.** `tauri-build` writes the executable's Windows
+  resource from `src-tauri\icons\icon.ico` and fails with
+  `icons/icon.ico not found` without it; `scripts\make-icons.mjs` writes it
+  (16/32/48/256, the same ring as `icon.png`). The macOS build does not use the
+  `.ico`.
+- **Run `cargo tauri` from the project root** — the directory that holds
+  `src-tauri/`, not `src-tauri/` itself: `cargo tauri` locates `src-tauri` by
+  searching the cwd and then its children, never its parents.
+- **`build-sea.js` quotes for cmd.exe** (`quoteForCmd`), so `npx.cmd`, the
+  esbuild banner and paths with spaces all survive.
 
 ### Config edits
 
@@ -236,3 +223,11 @@ The SEA build excludes `@github/keytar`, so `store_key_in_system = true` falls
 back to the in-binary body store, which keeps keys in plaintext inside the
 executable and needs a writable directory. `sdk://` routes are also unsupported
 in the binary — the `chatjimmy` submodule is excluded (see `build-sea.js`).
+
+A start also ensures a Windows Defender inbound allow rule for the bundled
+`model-proxy-v3.exe` (`src-tauri/src/firewall.rs`), so a tray-launched proxy is
+reachable from other hosts. The rule is program-scoped (any port and protocol)
+and named `Model Proxy Inbound`. Adding a rule needs Administrator and the tray
+is not elevated, so this is best-effort: the outcome is mirrored to the window's
+LOG section and the proxy starts regardless. Without elevation the rule is not
+added — run the tray once as Administrator, or add the rule by hand.

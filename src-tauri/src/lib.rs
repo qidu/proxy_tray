@@ -6,6 +6,7 @@
 //! supervisor, the tray and the window's command surface; `rpc.rs` is the
 //! protocol half.
 
+mod firewall;
 mod rpc;
 
 use std::path::PathBuf;
@@ -372,6 +373,15 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
     state.rpc.attach(child);
     state.set_status(ProxyStatus::Running);
     refresh_tray(&app, &state);
+
+    // Best-effort: a tray-launched proxy needs a Defender inbound rule to be
+    // reachable from other hosts. Adding one needs Administrator, so a failure
+    // is reported to the window's LOG and does not stop the start (doc §6).
+    match firewall::ensure_inbound_rule() {
+        Ok(Some(message)) => log_line(&app, format!("[tray] {message}")),
+        Ok(None) => {}
+        Err(err) => log_line(&app, format!("[tray] {err}")),
+    }
 
     let reader_state = Arc::clone(&state);
     let reader_app = app.clone();
