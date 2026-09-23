@@ -1,4 +1,4 @@
-// Regenerates src-tauri/icons/*.png.
+// Regenerates src-tauri/icons/*.png and icon.ico.
 //
 // The tray icon is the app's only status surface when the window is hidden, so
 // the three states must be distinguishable at icon size: they are one hollow
@@ -66,6 +66,79 @@ function encodePng(rgba, size) {
 }
 
 /**
+ * One 32-bit BMP icon entry: BITMAPINFOHEADER, bottom-up BGRA rows, then the
+ * 1bpp AND mask. BMP rather than a PNG payload, to match what `tauri icon`
+ * emits and what rc.exe has always accepted.
+ */
+function icoEntry(size, rgba) {
+  const header = Buffer.alloc(40);
+  header.writeUInt32LE(40, 0); // header size
+  header.writeInt32LE(size, 4); // width
+  header.writeInt32LE(size * 2, 8); // height: XOR image + AND mask
+  header.writeUInt16LE(1, 12); // planes
+  header.writeUInt16LE(32, 14); // bits per pixel
+  // Compression (BI_RGB), image size and the rest stay zero.
+
+  const xor = Buffer.alloc(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    // BMP rows run bottom-up, and the channels are BGRA, not RGBA.
+    const src = (size - 1 - y) * size * 4;
+    for (let x = 0; x < size; x++) {
+      const s = src + x * 4;
+      const d = (y * size + x) * 4;
+      xor[d] = rgba[s + 2];
+      xor[d + 1] = rgba[s + 1];
+      xor[d + 2] = rgba[s];
+      xor[d + 3] = rgba[s + 3];
+    }
+  }
+
+  // The AND mask marks fully transparent pixels; rows pad to 4 bytes.
+  const stride = Math.ceil(size / 32) * 4;
+  const mask = Buffer.alloc(stride * size);
+  for (let y = 0; y < size; y++) {
+    const src = (size - 1 - y) * size * 4;
+    for (let x = 0; x < size; x++) {
+      if (rgba[src + x * 4 + 3] === 0) mask[y * stride + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+  }
+
+  return Buffer.concat([header, xor, mask]);
+}
+
+/**
+ * Pack RGBA images into a Windows .ico. `tauri-build` requires
+ * `icons/icon.ico` to generate the executable's Windows resource — it is not
+ * optional there, and the PNGs above are not a substitute.
+ */
+function encodeIco(images) {
+  const entries = images.map(({ size, rgba }) => ({ size, data: icoEntry(size, rgba) }));
+
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: 1 = icon
+  header.writeUInt16LE(entries.length, 4);
+
+  let offset = header.length + entries.length * 16;
+  const directory = entries.map(({ size, data }) => {
+    const e = Buffer.alloc(16);
+    // A 256px image is encoded as 0 in the single-byte dimension fields.
+    e[0] = size === 256 ? 0 : size;
+    e[1] = size === 256 ? 0 : size;
+    e[2] = 0; // palette entries
+    e[3] = 0; // reserved
+    e.writeUInt16LE(1, 4); // colour planes
+    e.writeUInt16LE(32, 6); // bits per pixel
+    e.writeUInt32LE(data.length, 8);
+    e.writeUInt32LE(offset, 12);
+    offset += data.length;
+    return e;
+  });
+
+  return Buffer.concat([header, ...directory, ...entries.map(({ data }) => data)]);
+}
+
+/**
  * A hollow circle (ring), anti-aliased by treating the distance from the centre
  * as pixel coverage. The stroke is a fixed fraction of the size so the ring
  * keeps the same weight at every resolution. One pixel of feathering is enough
@@ -114,3 +187,13 @@ for (const [name, size, colour] of ICONS) {
   writeFileSync(path, encodePng(ring(size, colour), size));
   console.log(`wrote ${path} (${size}x${size})`);
 }
+
+// The Windows app icon: the same green ring as icon.png, drawn at every size
+// Windows asks for so none of them is an upscale.
+const ICO_SIZES = [16, 32, 48, 256];
+const icoPath = join(ICON_DIR, 'icon.ico');
+writeFileSync(
+  icoPath,
+  encodeIco(ICO_SIZES.map((size) => ({ size, rgba: ring(size, RUNNING) }))),
+);
+console.log(`wrote ${icoPath} (${ICO_SIZES.join(', ')})`);

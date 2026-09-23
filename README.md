@@ -50,6 +50,11 @@ itself (plus `.exe` on Windows) — unconditionally, with no existence check
 well and it is appended twice, and the build fails with
 `resource path ...-x86_64-apple-darwin-x86_64-apple-darwin doesn't exist`.
 
+So the entry is the **full path with the bare basename**: keep the `binaries/`
+directory, and leave the file named `model-proxy-v3` — no target-triple suffix,
+i.e. no arch-system-platform (`-x86_64-apple-darwin`,
+`-x86_64-pc-windows-msvc`). Tauri supplies the host's triple itself.
+
 Get the triple with `rustc --print host-tuple`. `scripts/build-sea.js` emits a
 platform-tagged name (`model-proxy-v3-macos-x64`), so a rename into the triple
 form is always needed.
@@ -137,6 +142,97 @@ git -c protocol.file.allow=always submodule update --init
 
 ## Windows
 
+The tray ships the proxy, so a Windows build starts by producing a Windows SEA
+binary. SEA embeds a copy of the Node that built it, so it **cannot
+cross-compile**: a `dist/model-proxy-v3-macos-x64` is useless here, and the
+whole sequence below has to run on Windows.
+
+### Prerequisites
+
+| Need | Why |
+| --- | --- |
+| Rust with the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`) | Tauri's core links against MSVC, not the GNU target |
+| Visual Studio Build Tools, "Desktop development with C++" workload | supplies the MSVC linker (`link.exe`) `rustc` shells out to |
+| WebView2 runtime | the window's webview; preinstalled on Win 10/11, else the Evergreen bootstrapper |
+| Tauri CLI: `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | provides `cargo tauri`; without it you get `error: no such command "tauri"` |
+| Node for the SEA build | must be official/self-contained; `npx --yes --package=node@26 node scripts\build-sea.js` supplies one without touching the system Node |
+
+### Steps
+
+1. Clone with the submodule, from `proxy_tray`:
+
+   ```
+   git -c protocol.file.allow=always submodule update --init
+   ```
+
+   `.gitmodules` points at a local relative path, so the `file` transport needs
+   enabling (see Cloning).
+
+2. Build the SEA binary inside the submodule:
+
+   ```
+   cd model_proxy_v3
+   npm ci
+   npx --yes --package=node@26 node scripts\build-sea.js
+   ```
+
+   The output is `model_proxy_v3\dist\model-proxy-v3-win.exe`. `build-sea.js`
+   already quotes for cmd.exe (`quoteForCmd`), so `npx.cmd`, the esbuild banner
+   and paths with spaces all survive.
+
+3. Stage it by hand. `scripts/stage-sidecar.sh` is bash and looks for the macOS
+   build by name, so it does not run here — do what it does:
+
+   ```
+   rustc --print host-tuple      :: x86_64-pc-windows-msvc
+   copy model_proxy_v3\dist\model-proxy-v3-win.exe ^
+        src-tauri\binaries\model-proxy-v3-x86_64-pc-windows-msvc.exe
+   ```
+
+   The triple **and** the `.exe` suffix are both mandatory: `externalBin`
+   appends them itself, so the staged file must already carry them (see the
+   `externalBin` naming rule above). `cargo check` fails without this file —
+   `build.rs` copies it.
+
+4. Generate the icons:
+
+   ```
+   node scripts\make-icons.mjs
+   ```
+
+   This is **not** optional on Windows. `tauri-build` generates the executable's
+   Windows resource from `src-tauri\icons\icon.ico` and fails with
+   `icons/icon.ico not found` without it; the script writes it (16/32/48/256,
+   the same ring as `icon.png`). The macOS build does not use the `.ico`.
+
+5. From the **project root** (the directory that holds `src-tauri/`), not
+   `src-tauri/` itself:
+
+   ```
+   cargo tauri build
+   ```
+
+   `cargo tauri` locates `src-tauri` by searching the cwd and then its
+   children — never its parents — so run it from the root, where the checkout
+   sits one level down.
+
+### Config edits
+
+Three values in `src-tauri\tauri.conf.json` are macOS-specific and must change:
+
+| Key | Now (macOS) | Windows |
+| --- | --- | --- |
+| `bundle.externalBin` | an absolute macOS path | `["binaries/model-proxy-v3"]` — untagged and relative; Tauri appends `-<triple>.exe` |
+| `bundle.icon` | `["icons/icon.png"]` | add `"icons/icon.ico"` |
+| `plugins."proxy-tray".configPath` | an absolute macOS path | an absolute Windows path, e.g. `C:\\...\\model_proxy_v3\\proxy_config.toml` |
+
+`externalBin` is relative on every platform: Tauri resolves it against
+`src-tauri` and then appends the triple. An absolute path, or one that already
+carries the triple, is wrong (see the naming rule above).
+
+### Runtime caveats
+
 The SEA build excludes `@github/keytar`, so `store_key_in_system = true` falls
 back to the in-binary body store, which keeps keys in plaintext inside the
-executable and needs a writable directory.
+executable and needs a writable directory. `sdk://` routes are also unsupported
+in the binary — the `chatjimmy` submodule is excluded (see `build-sea.js`).
