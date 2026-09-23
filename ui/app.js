@@ -16,6 +16,11 @@ const RESERVED_CATEGORY_KEYS = new Set(['upstream_mode', 'base_url']);
 /** Whether the proxy is running, as of the last status render. */
 let running = false;
 
+/** Lines kept in the LOG section; older lines are dropped so a chatty proxy
+ *  cannot grow the DOM without bound. */
+const LOG_LINES = 500;
+const logLines = [];
+
 /** Show an error. Failures are never swallowed — they land on screen. */
 function fail(where, err) {
   const message = `${where}: ${err && err.message ? err.message : err}`;
@@ -140,6 +145,17 @@ function onExport(event) {
   }
 }
 
+/** Append one line to the LOG section, capped and scrolled to the bottom. */
+function appendLog(line) {
+  logLines.push(line);
+  if (logLines.length > LOG_LINES) {
+    logLines.splice(0, logLines.length - LOG_LINES);
+  }
+  const el = $('log');
+  el.textContent = logLines.join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
 $('toggle').addEventListener('click', () =>
   run('toggle', running ? 'proxy_stop' : 'proxy_start'),
 );
@@ -158,5 +174,6 @@ listen('proxy://status', (event) => {
 });
 listen('proxy://notification', (event) => onNotification(event.payload));
 listen('proxy://export', onExport);
+listen('proxy://log', (event) => appendLog(event.payload.line));
 
 refresh();

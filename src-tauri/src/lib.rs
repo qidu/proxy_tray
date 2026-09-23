@@ -9,6 +9,7 @@
 mod rpc;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -51,6 +52,20 @@ impl ProxyStatus {
     }
 }
 
+/// Classify a child exit: a stop we asked for — or a clean exit — is `Stopped`;
+/// anything else is a failure the window and the tray must show (doc §5).
+fn exit_status(expected: bool, code: Option<i32>, signal: Option<i32>) -> ProxyStatus {
+    if expected {
+        return ProxyStatus::Stopped;
+    }
+    match code {
+        Some(0) => ProxyStatus::Stopped,
+        _ => ProxyStatus::Failed(format!(
+            "the proxy exited unexpectedly (code {code:?}, signal {signal:?})"
+        )),
+    }
+}
+
 struct ProxyState {
     rpc: Arc<RpcClient>,
     /// Absolute path handed to the child, and shown in the window (doc §7).
@@ -62,6 +77,10 @@ struct ProxyState {
     /// Message from the last failed `config.reload`. Drives the amber icon
     /// even while the proxy keeps running (doc §5).
     reload_error: Mutex<Option<String>>,
+    /// Set while a stop is in progress, so the reader can tell an exit we asked
+    /// for from a crash (doc §5). Cleared by the reader when it classifies the
+    /// exit.
+    stopping: AtomicBool,
 }
 
 impl ProxyState {
@@ -183,6 +202,7 @@ pub fn run() {
                 status: Mutex::new(ProxyStatus::Stopped),
                 proxy_version: Mutex::new(None),
                 reload_error: Mutex::new(None),
+                stopping: AtomicBool::new(false),
             }));
             app.manage(build_tray(app)?);
             hide_on_close(app.handle());
@@ -365,20 +385,28 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
                         let _ = reader_app.emit("proxy://notification", notification);
                     }
                 }
-                // stdout is the frame channel, so logs must stay on stderr (§3).
-                CommandEvent::Stderr(bytes) => {
-                    eprintln!("[proxy] {}", String::from_utf8_lossy(&bytes));
+                // stdout is the frame channel, so logs stay on stderr (§3) —
+                // and go to the window, where a GUI launch can see them.
+                CommandEvent::Stderr(bytes) => log_line(
+                    &reader_app,
+                    format!("[proxy] {}", String::from_utf8_lossy(&bytes).trim_end()),
+                ),
+                CommandEvent::Error(err) => {
+                    log_line(&reader_app, format!("[proxy] stream error: {err}"))
                 }
-                CommandEvent::Error(err) => eprintln!("[proxy] stream error: {err}"),
                 CommandEvent::Terminated(payload) => {
-                    eprintln!(
-                        "[proxy] exited (code {:?}, signal {:?})",
-                        payload.code, payload.signal
+                    log_line(
+                        &reader_app,
+                        format!(
+                            "[tray] the proxy exited (code {:?}, signal {:?})",
+                            payload.code, payload.signal
+                        ),
                     );
                     rpc.take_child();
                     rpc.fail_pending("the proxy exited");
                     *reader_state.proxy_version.lock().unwrap() = None;
-                    reader_state.set_status(ProxyStatus::Stopped);
+                    let expected = reader_state.stopping.swap(false, Ordering::SeqCst);
+                    reader_state.set_status(exit_status(expected, payload.code, payload.signal));
                     refresh_tray(&reader_app, &reader_state);
                     break;
                 }
@@ -408,9 +436,27 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Send one line to the window's LOG section (doc §5).
+fn emit_log(app: &AppHandle, line: &str) {
+    let _ = app.emit("proxy://log", json!({ "line": line }));
+}
+
+/// Mirror one diagnostic line to the process stderr and to the window's LOG
+/// section. A GUI launch shows neither a terminal nor the process stderr, so
+/// the event is the only way a user sees why a start failed.
+fn log_line(app: &AppHandle, line: impl AsRef<str>) {
+    let line = line.as_ref();
+    eprintln!("{line}");
+    emit_log(app, line);
+}
+
 /// Record a failed start and refresh the tray, handing the message back so the
 /// caller surfaces it: the window shows it, the menu logs it.
+///
+/// The message also goes to the LOG section — a spawn failure produces no
+/// stderr, so without this the window's log would stay empty on a failed start.
 fn fail_start(app: &AppHandle, state: &Arc<ProxyState>, message: String) -> String {
+    emit_log(app, &format!("[tray] {message}"));
     state.set_status(ProxyStatus::Failed(message.clone()));
     refresh_tray(app, state);
     message
@@ -423,6 +469,10 @@ async fn stop_proxy(app: &AppHandle, state: &Arc<ProxyState>) {
         refresh_tray(app, state);
         return;
     }
+
+    // Mark the exit as requested so the reader classifies it `Stopped` rather
+    // than a crash (doc §5).
+    state.stopping.store(true, Ordering::SeqCst);
 
     // `shutdown` replies `{ok}` and *then* exits (src/rpc.ts), so a successful
     // reply is not proof it is gone — the kill is the backstop.
@@ -760,4 +810,34 @@ async fn export_provider(app: AppHandle, kind: String) -> Result<(), String> {
 fn open_dashboard(app: AppHandle) -> Result<(), String> {
     let state = state_of(&app);
     open_dashboard_impl(&app, &state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requested_stop_is_stopped() {
+        // A stop we asked for is never a failure, whatever the exit looked like.
+        assert_eq!(exit_status(true, None, Some(9)), ProxyStatus::Stopped);
+        assert_eq!(exit_status(true, Some(0), None), ProxyStatus::Stopped);
+    }
+
+    #[test]
+    fn clean_spontaneous_exit_is_stopped() {
+        assert_eq!(exit_status(false, Some(0), None), ProxyStatus::Stopped);
+    }
+
+    #[test]
+    fn unexpected_exit_is_failed() {
+        match exit_status(false, Some(1), None) {
+            ProxyStatus::Failed(message) => assert!(message.contains("Some(1)"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // Killed by a signal: no exit code, so the signal must carry the reason.
+        match exit_status(false, None, Some(9)) {
+            ProxyStatus::Failed(message) => assert!(message.contains("Some(9)"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
 }
