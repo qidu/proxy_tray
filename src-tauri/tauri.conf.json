@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "model_proxy_v3",
+        "title": "Model Proxy V3",
         "width": 560,
         "height": 460,
         "visible": false
@@ -33,7 +33,6 @@
   },
   "plugins": {
     "proxy-tray": {
-      "configPath": "/Users/sudu/dev/bot/model_proxy_v3/proxy_config.toml",
       "port": 8788
     }
   }

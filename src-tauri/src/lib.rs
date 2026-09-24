@@ -34,6 +34,13 @@ const ICON_ERROR: &[u8] = include_bytes!("../icons/tray-error.png");
 
 /// The proxy's own default port (`src/server.ts`).
 const DEFAULT_PORT: u16 = 8788;
+/// The proxy's home-config default, relative to the user's home directory.
+///
+/// Must match `HOME_PROXY_CONFIG_PATH` in `src/utils/config-loader.ts`. Both are
+/// deliberately this same literal on *every* platform — not
+/// `~/Library/Application Support`, not `%APPDATA%` — so the tray and a directly
+/// launched proxy resolve to the same file.
+const HOME_CONFIG_RELATIVE: &str = ".config/model-proxy-v3/proxy_config.toml";
 /// How long to wait for the port to be released after a kill before spawning
 /// anyway, and how often to re-check.
 const PORT_FREE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -110,17 +117,37 @@ fn state_of(app: &AppHandle) -> Arc<ProxyState> {
     Arc::clone(state.inner())
 }
 
-/// Resolve the config the proxy will read (doc §7, "Pass explicitly").
+/// `~/.config/model-proxy-v3/proxy_config.toml`, creating the directory first.
 ///
-/// `PROXY_CONFIG_PATH` wins; otherwise the absolute path in `tauri.conf.json`
-/// under `plugins."proxy-tray".configPath`. Never derived from the working
-/// directory: a Finder launch has cwd `/`, so a relative default resolves to a
-/// path that does not exist and the proxy silently reads the wrong file.
+/// The directory is created here rather than left to the proxy: passing
+/// `PROXY_CONFIG_PATH` explicitly means the proxy's own resolver
+/// (`resolveDefaultProxyConfigPath`, `config-loader.ts`) never runs, and that is
+/// what would otherwise create it. `persistProxyConfigToPath` writes
+/// `<path>.tmp` with no mkdir, so without this a first `config.put` on a fresh
+/// install would fail.
 ///
-/// `None` means neither source named a config. The proxy's own default is
-/// `./proxy_config.toml` (`server.ts:45`), which is cwd-relative too, so the
-/// caller must not paper over this with an empty `PROXY_CONFIG_PATH` — an empty
-/// string is falsy and would be discarded by that same `||` fallback.
+/// `None` only when the home directory cannot be determined.
+fn home_config_path() -> Option<PathBuf> {
+    let path = dirs::home_dir()?.join(HOME_CONFIG_RELATIVE);
+    if let Some(parent) = path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            eprintln!("[tray] could not create {}: {err}", parent.display());
+        }
+    }
+    Some(path)
+}
+
+/// Resolve the config the proxy will read (doc §7).
+///
+/// `PROXY_CONFIG_PATH` wins, then the absolute path in `tauri.conf.json` under
+/// `plugins."proxy-tray".configPath`, then [`home_config_path`]. Never derived
+/// from the working directory: a Finder launch has cwd `/`, where any relative
+/// path resolves to something that does not exist.
+///
+/// `None` means the home directory could not be determined. The caller then
+/// omits `PROXY_CONFIG_PATH` entirely rather than passing an empty string — an
+/// empty value is falsy and `server.ts`'s `||` would discard it. Omitting is
+/// harmless: the proxy's own resolver lands on the same home path.
 fn resolve_config_path(config: &tauri::Config) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PROXY_CONFIG_PATH") {
         return Some(PathBuf::from(path));
@@ -131,13 +158,19 @@ fn resolve_config_path(config: &tauri::Config) -> Option<PathBuf> {
         .get("proxy-tray")
         .and_then(|plugin| plugin.get("configPath"))
         .and_then(serde_json::Value::as_str);
-    match configured {
-        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
-        _ => {
+    if let Some(path) = configured.filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    match home_config_path() {
+        Some(path) => {
             eprintln!(
-                "[tray] no PROXY_CONFIG_PATH and no plugins.\"proxy-tray\".configPath in \
-                 tauri.conf.json: the proxy will use its own working-directory default"
+                "[tray] no PROXY_CONFIG_PATH and no plugins.\"proxy-tray\".configPath: using {}",
+                path.display()
             );
+            Some(path)
+        }
+        None => {
+            eprintln!("[tray] could not determine the home directory; the proxy will resolve its own default");
             None
         }
     }
@@ -763,6 +796,21 @@ async fn proxy_status(app: AppHandle) -> Result<Value, String> {
             .config_path
             .as_ref()
             .map(|path| path.to_string_lossy())),
+    );
+    // Where the proxy's own resolver looks when no path was handed to it (doc
+    // §7): the working directory it inherits, then the home path. The window
+    // shows both when `configPath` is null, so a user with no config knows
+    // where to drop one.
+    object.insert(
+        "cwd".into(),
+        json!(std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())),
+    );
+    object.insert(
+        "homeConfigPath".into(),
+        json!(dirs::home_dir()
+            .map(|home| home.join(HOME_CONFIG_RELATIVE).to_string_lossy().into_owned())),
     );
     object.insert(
         "reloadError".into(),

@@ -35,8 +35,12 @@ source on their own platform — nothing is cross-compiled.
 The SEA build needs an **official** Node (nodejs.org, nvm,
 `actions/setup-node`): the binary is a copy of the Node that built it, and
 Homebrew's Node is a thin launcher with SEA compiled out. Both sequences below
-therefore build under `npx --yes --package=node@26`, which fetches an official
+therefore build under `npx --yes --package=node@22`, which fetches an official
 Node without touching the system install.
+
+```
+npx --yes @tauri-apps/cli@^2 build
+```
 
 ### macOS
 
@@ -44,7 +48,7 @@ Node without touching the system install.
 # 1. Proxy: install deps and build the SEA binary.
 cd model_proxy_v3
 npm ci
-npx --yes --package=node@26 node scripts/build-sea.js   # -> dist/model-proxy-v3-macos-<arch>
+npx --yes --package=node@22 node scripts/build-sea.js   # -> dist/model-proxy-v3-macos-<arch>
 
 # 2. Tray: stage the sidecar under the target-triple name externalBin needs.
 cd ..
@@ -57,7 +61,7 @@ cargo tauri build
 ### Windows
 
 Run every step on Windows — SEA embeds a copy of the Node that built it, so a
-`dist/model-proxy-v3-macos-x64` is useless here.
+`dist/model-proxy-v3-x86_64-apple-darwin` is useless here.
 
 ```
 :: 1. Clone with the submodule (the file transport needs enabling; see Cloning).
@@ -66,12 +70,12 @@ git -c protocol.file.allow=always submodule update --init
 :: 2. Proxy: install deps and build the SEA binary.
 cd model_proxy_v3
 npm ci
-npx --yes --package=node@26 node scripts\build-sea.js   :: -> dist\model-proxy-v3-win.exe
+npx --yes --package=node@22 node scripts\build-sea.js   :: -> dist\model-proxy-v3-x86_64-pc-windows-msvc.exe
 
-:: 3. Stage the sidecar by hand — stage-sidecar.sh is bash and looks for the
-::    macOS build by name. The triple AND the .exe suffix are both mandatory.
+:: 3. Stage the sidecar by hand — build-sea.js already names the binary with
+::    the host triple, so copy it to the externalBin location with the same name.
 rustc --print host-tuple                                :: x86_64-pc-windows-msvc
-copy model_proxy_v3\dist\model-proxy-v3-win.exe ^
+copy model_proxy_v3\dist\model-proxy-v3-x86_64-pc-windows-msvc.exe ^
      src-tauri\binaries\model-proxy-v3-x86_64-pc-windows-msvc.exe
 
 :: 4. Generate the Windows icon. Not optional: tauri-build writes the
@@ -101,9 +105,9 @@ directory, and leave the file named `model-proxy-v3` — no target-triple suffix
 i.e. no arch-system-platform (`-x86_64-apple-darwin`,
 `-x86_64-pc-windows-msvc`). Tauri supplies the host's triple itself.
 
-Get the triple with `rustc --print host-tuple`. `scripts/build-sea.js` emits a
-platform-tagged name (`model-proxy-v3-macos-x64`), so a rename into the triple
-form is always needed.
+Get the triple with `rustc --print host-tuple`. `scripts/build-sea.js` now emits
+the triple name directly (e.g. `model-proxy-v3-x86_64-apple-darwin`), so no
+rename is needed — `stage-sidecar.sh` copies it under the same name.
 
 Once copied into the build, the triple is stripped again: the sidecar is
 `target/{debug,release}/model-proxy-v3`, and inside the bundle
@@ -145,7 +149,7 @@ The app resolves the config file and port as:
 
 | Setting | Source |
 | --- | --- |
-| `PROXY_CONFIG_PATH` | env if set, else `plugins."proxy-tray".configPath` in `src-tauri/tauri.conf.json` |
+| `PROXY_CONFIG_PATH` | env if set, else `plugins."proxy-tray".configPath` in `src-tauri/tauri.conf.json`, else `~/.config/model-proxy-v3/proxy_config.toml` |
 | `PORT` | env if set, else `plugins."proxy-tray".port` in `src-tauri/tauri.conf.json`, else `8788` |
 
 Both fall back to the same `plugins."proxy-tray"` block, because a
@@ -161,18 +165,23 @@ reported on stderr and the default is used.
 
 The config path is **absolute and never derived from the working directory**.
 A Finder-launched `.app` has `cwd` `/`, where any relative default resolves to a
-path that does not exist — and the proxy's own fallback (`./proxy_config.toml`,
-`server.ts:45`) is cwd-relative too, so it would quietly read the wrong file.
-To point the tray at a different config, edit `configPath` in `tauri.conf.json`
-and rebuild, or set `PROXY_CONFIG_PATH`.
+path that does not exist.
 
-If neither source names a config, the tray does **not** pass the variable at
-all: an empty `PROXY_CONFIG_PATH` is falsy and `server.ts:45`'s `||` would
-silently swap in `./proxy_config.toml`. The window shows `not configured —
-set PROXY_CONFIG_PATH` instead.
+With neither `PROXY_CONFIG_PATH` nor `configPath` set, the tray uses
+`~/.config/model-proxy-v3/proxy_config.toml` — the same literal on every
+platform, matching `HOME_PROXY_CONFIG_PATH` in
+`model_proxy_v3/src/utils/config-loader.ts`, so the tray and a directly launched
+proxy agree on one file. The tray creates that directory at startup: it passes
+`PROXY_CONFIG_PATH` explicitly, so the proxy's own resolver — which would
+otherwise create it — never runs, and `persistProxyConfigToPath` writes
+`<path>.tmp` with no `mkdir`. To point the tray at a different config, set
+`configPath` in `tauri.conf.json` and rebuild, or set `PROXY_CONFIG_PATH`.
 
 The resolved absolute path is shown in the window, so the live config is never
-ambiguous.
+ambiguous. When no path is resolved (the home directory is undeterminable, so
+`PROXY_CONFIG_PATH` is omitted), the window instead shows the two places the
+proxy's own resolver will look — the working directory it inherits and the home
+path — so there is always somewhere to drop a config.
 
 Note the submodule clone does not carry `proxy_config.toml` (it is untracked
 upstream) — copy it in after a fresh `git submodule update --init`.
@@ -205,13 +214,16 @@ follows is Windows-specific.
 
 ### Config edits
 
-Three values in `src-tauri\tauri.conf.json` are macOS-specific and must change:
+Two values in `src-tauri\tauri.conf.json` are macOS-specific and must change:
 
 | Key | Now (macOS) | Windows |
 | --- | --- | --- |
 | `bundle.externalBin` | an absolute macOS path | `["binaries/model-proxy-v3"]` — untagged and relative; Tauri appends `-<triple>.exe` |
 | `bundle.icon` | `["icons/icon.png"]` | add `"icons/icon.ico"` |
-| `plugins."proxy-tray".configPath` | an absolute macOS path | an absolute Windows path, e.g. `C:\\...\\model_proxy_v3\\proxy_config.toml` |
+
+`plugins."proxy-tray".configPath` needs no per-platform value: it is absent by
+default and the tray falls back to `~/.config/model-proxy-v3/proxy_config.toml`,
+which is the same on every platform.
 
 `externalBin` is relative on every platform: Tauri resolves it against
 `src-tauri` and then appends the triple. An absolute path, or one that already

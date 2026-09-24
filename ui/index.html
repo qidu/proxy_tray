@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>model_proxy_v3</title>
+    <title>Model Proxy V3</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -43,13 +43,25 @@
     </section>
 
     <section>
-      <h2>Export output</h2>
-      <pre id="export-output">No export yet.</pre>
+      <div class="section-head">
+        <h2>Export output</h2>
+        <div class="head-actions">
+          <button id="export-copy" class="mini">Copy</button>
+          <button id="export-clear" class="mini">Clear</button>
+        </div>
+      </div>
+      <pre id="export-output" class="empty">No export yet.</pre>
     </section>
 
     <section>
-      <h2>Log</h2>
-      <pre id="log">No log yet.</pre>
+      <div class="section-head">
+        <h2>Log</h2>
+        <div class="head-actions">
+          <button id="log-copy" class="mini">Copy</button>
+          <button id="log-clear" class="mini">Clear</button>
+        </div>
+      </div>
+      <pre id="log" class="empty">No log yet.</pre>
     </section>
 
     <script src="app.js"></script>

@@ -19,11 +19,12 @@ if [ "$#" -ge 1 ]; then
   SRC="$1"
 else
   # Prefer the submodule's own build output, then the sibling checkout's — the
-  # submodule is a fresh clone, so its dist/ is usually empty.
+  # submodule is a fresh clone, so its dist/ is usually empty. build-sea.js
+  # names the binary with the host triple already, so no rename is needed.
   SRC=""
   for candidate in \
-    "model_proxy_v3/dist/model-proxy-v3-macos-x64" \
-    "../model_proxy_v3/dist/model-proxy-v3-macos-x64"
+    "model_proxy_v3/dist/model-proxy-v3-$TRIPLE" \
+    "../model_proxy_v3/dist/model-proxy-v3-$TRIPLE"
   do
     if [ -f "$candidate" ]; then
       SRC="$candidate"
@@ -36,7 +37,7 @@ if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
   echo "stage-sidecar: no SEA binary found." >&2
   echo "Build one first:" >&2
   echo "  cd model_proxy_v3 && npm ci && npx --yes --package=node@26 node scripts/build-sea.js" >&2
-  echo "or pass a path: bash scripts/stage-sidecar.sh /path/to/model-proxy-v3-<platform>" >&2
+  echo "or pass a path: bash scripts/stage-sidecar.sh /path/to/model-proxy-v3-$TRIPLE" >&2
   exit 1
 fi
 

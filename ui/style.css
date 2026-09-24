@@ -121,11 +121,33 @@ h2 {
   margin: 14px 0 4px;
 }
 
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 4px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.head-actions {
+  display: flex;
+  gap: 6px;
+}
+
+button.mini {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 .path {
   display: block;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   word-break: break-all;
+  white-space: pre-wrap;
   color: var(--muted);
 }
 
@@ -140,6 +162,11 @@ pre {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* Cleared sections collapse to the placeholder's height. */
+pre.empty {
+  max-height: 40px;
 }
 
 .error {

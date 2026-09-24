@@ -51,9 +51,9 @@ function renderStatus(status) {
   $('dot').className = `dot ${error || reloadError ? 'error' : running ? 'running' : 'stopped'}`;
   $('headline').textContent = running ? `Running on :${status.port}` : 'Stopped';
   $('endpoint').textContent = [
-    status && status.version ? `Ver ${status.version}` : null,
     status && status.pid ? `pid ${status.pid}` : null,
     status && status.uptimeMs !== undefined ? `up ${Math.round(status.uptimeMs / 1000)}s` : null,
+    status && status.version ? `Ver ${status.version}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -61,8 +61,7 @@ function renderStatus(status) {
   $('toggle').textContent = running ? 'Stop' : 'Start';
 
   if (status) {
-    $('config-path').textContent =
-      status.configPath || 'not configured — set PROXY_CONFIG_PATH';
+    $('config-path').textContent = configPathText(status);
   }
   if (status && status.activeRequests !== undefined) {
     $('active').textContent = status.activeRequests;
@@ -75,6 +74,22 @@ function renderStatus(status) {
 
   $('reload-error').textContent = reloadError;
   $('reload-error').hidden = !reloadError;
+}
+
+/**
+ * What the Config section shows: the path handed to the proxy, or — when none
+ * was resolved — the two places the proxy's own resolver would look instead
+ * (doc §7), so the user knows where to drop a config.
+ */
+function configPathText(status) {
+  if (status.configPath) {
+    return status.configPath;
+  }
+  const candidates = [
+    status.cwd ? `${status.cwd}/proxy_config.toml` : null,
+    status.homeConfigPath || '~/.config/model-proxy-v3/proxy_config.toml',
+  ].filter(Boolean);
+  return ['not configured — the proxy will look in:', ...candidates].join('\n');
 }
 
 /** Models in [models.*], summed across categories; aliases are separate. */
@@ -139,7 +154,9 @@ function onNotification(frame) {
 
 function onExport(event) {
   const { kind, output, error } = event.payload;
-  $('export-output').textContent = output || '(no output)';
+  const el = $('export-output');
+  el.textContent = output || '(no output)';
+  el.classList.remove('empty');
   if (error) {
     fail(`export (${kind})`, error);
   }
@@ -152,8 +169,28 @@ function appendLog(line) {
     logLines.splice(0, logLines.length - LOG_LINES);
   }
   const el = $('log');
+  el.classList.remove('empty');
   el.textContent = logLines.join('\n');
   el.scrollTop = el.scrollHeight;
+}
+
+/** Copy a section's text to the clipboard. Failures are never swallowed. */
+async function copySection(where, el) {
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    fail(where, 'clipboard API unavailable');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(el.textContent);
+  } catch (err) {
+    fail(where, err);
+  }
+}
+
+/** Empty a section back to its placeholder and collapse it (`.empty`). */
+function clearSection(el, placeholder) {
+  el.textContent = placeholder;
+  el.classList.add('empty');
 }
 
 $('toggle').addEventListener('click', () =>
@@ -166,6 +203,18 @@ $('export-pi').addEventListener('click', () => run('export (pi)', 'export_provid
 $('export-openclaw').addEventListener('click', () =>
   run('export (openclaw)', 'export_provider', { kind: 'openclaw' }),
 );
+
+$('export-copy').addEventListener('click', () => copySection('copy export', $('export-output')));
+$('export-clear').addEventListener('click', () =>
+  clearSection($('export-output'), 'No export yet.'),
+);
+$('log-copy').addEventListener('click', () => copySection('copy log', $('log')));
+$('log-clear').addEventListener('click', () => {
+  // Drop the buffer too, so the next line starts the log fresh rather than
+  // re-appending lines the user just cleared.
+  logLines.length = 0;
+  clearSection($('log'), 'No log yet.');
+});
 
 listen('proxy://status', (event) => {
   renderStatus(event.payload);
