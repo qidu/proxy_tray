@@ -25,10 +25,11 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.ico"
     ],
     "externalBin": [
-      "/Users/claw/dev/bot/model_proxy_v3/dist/model-proxy-v3"
+      "binaries/model-proxy-v3"
     ]
   },
   "plugins": {
