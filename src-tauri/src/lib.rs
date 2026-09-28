@@ -310,7 +310,7 @@ fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
     let (icon, label, error) = match &status {
         ProxyStatus::Running => {
             let label = match &version {
-                Some(version) => format!("Running on :{} · Ver {}", state.port, version),
+                Some(version) => format!("Running on :{} · (Ver {})", state.port, version),
                 None => format!("Running on :{}", state.port),
             };
             (ICON_RUNNING, label, None)

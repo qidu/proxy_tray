@@ -43,17 +43,38 @@ async function run(where, command, args) {
   }
 }
 
+/** Format uptime in milliseconds to a human-readable string with h/m/s/ms units. */
+function formatUptime(uptimeMs) {
+  if (uptimeMs < 1000) {
+    return `up ${uptimeMs}ms`;
+  }
+  const totalSeconds = Math.floor(uptimeMs / 1000);
+  if (totalSeconds < 60) {
+    return `up ${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `up ${minutes}m ${seconds}s` : `up ${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `up ${hours}h ${remainingMinutes}m` : `up ${hours}h`;
+}
+
 function renderStatus(status) {
   running = Boolean(status && status.running);
   const reloadError = (status && status.reloadError) || '';
   const error = (status && status.error) || '';
+  const activeRequests = status && status.activeRequests ? Number(status.activeRequests) : 0;
+  const isServing = running && activeRequests > 0;
 
-  $('dot').className = `dot ${error || reloadError ? 'error' : running ? 'running' : 'stopped'}`;
+  $('dot').className = `dot ${error || reloadError ? 'error' : running ? 'running' : 'stopped'}${isServing ? ' serving' : ''}`;
   $('headline').textContent = running ? `Running on :${status.port}` : 'Stopped';
   $('endpoint').textContent = [
     status && status.pid ? `pid ${status.pid}` : null,
-    status && status.uptimeMs !== undefined ? `up ${Math.round(status.uptimeMs / 1000)}s` : null,
-    status && status.version ? `Ver ${status.version}` : null,
+    status && status.uptimeMs !== undefined ? formatUptime(status.uptimeMs) : null,
+    status && status.version ? `(Ver ${status.version})` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -76,6 +97,11 @@ function renderStatus(status) {
   $('reload-error').hidden = !reloadError;
 }
 
+/** Normalize path separators to forward slashes for consistent display. */
+function normalizePath(path) {
+  return path.replace(/\\/g, '/');
+}
+
 /**
  * What the Config section shows: the path handed to the proxy, or — when none
  * was resolved — the two places the proxy's own resolver would look instead
@@ -83,11 +109,11 @@ function renderStatus(status) {
  */
 function configPathText(status) {
   if (status.configPath) {
-    return status.configPath;
+    return normalizePath(status.configPath);
   }
   const candidates = [
-    status.cwd ? `${status.cwd}/proxy_config.toml` : null,
-    status.homeConfigPath || '~/.config/model-proxy-v3/proxy_config.toml',
+    status.cwd ? `${normalizePath(status.cwd)}/proxy_config.toml` : null,
+    status.homeConfigPath ? normalizePath(status.homeConfigPath) : '~/.config/model-proxy-v3/proxy_config.toml',
   ].filter(Boolean);
   return ['not configured — the proxy will look in:', ...candidates].join('\n');
 }
@@ -132,10 +158,19 @@ let sawFirstConfigTick = false;
 function onNotification(frame) {
   const params = frame.params || {};
   switch (frame.method) {
-    case 'stats.tick':
-      $('active').textContent = params.activeRequests;
+    case 'stats.tick': {
+      const activeRequests = Number(params.activeRequests);
+      $('active').textContent = activeRequests;
       $('tokens').textContent = Number(params.tokensTotal).toLocaleString();
+      // Update the serving indicator on the dot
+      const dot = $('dot');
+      if (running && activeRequests > 0) {
+        dot.classList.add('serving');
+      } else {
+        dot.classList.remove('serving');
+      }
       break;
+    }
     case 'config.changed': {
       if (!sawFirstConfigTick) {
         sawFirstConfigTick = true;

@@ -186,6 +186,69 @@ path — so there is always somewhere to drop a config.
 Note the submodule clone does not carry `proxy_config.toml` (it is untracked
 upstream) — copy it in after a fresh `git submodule update --init`.
 
+## Config field aliases
+
+The proxy's hand-rolled TOML parser (`model_proxy_v3/src/utils/config-loader.ts`)
+accepts both canonical and short field names in inline tables. Canonical names
+win when both are present.
+
+### `[models.*]` inline tables (per-model overrides)
+
+```toml
+[models.openai]
+gpt-4o = {target = "openai", base_url = "https://api.openai.com", api_key = "sk-...", upstream_mode = "openai-completions"}
+```
+
+| Canonical | Short alias | Notes |
+| --- | --- | --- |
+| `base_url` | `base` | |
+| `upstream_mode` | `mode` | Must be a value from `UPSTREAM_MODES` |
+| `api_key` | `key` | |
+| `target` | — | Optional; defaults to the model key (`gpt-4o`) |
+
+`url` is **not** accepted — use `base_url` or `base`.
+
+### `[passthrough]` inline tables (passthrough targets)
+
+```toml
+[passthrough]
+openai = {base = "https://api.openai.com", key = "sk-...", mode = "openai-completions", share = 1}
+```
+
+| Canonical | Short alias | Notes |
+| --- | --- | --- |
+| `base` | — | **Canonical here** (short name is primary) |
+| `base_url` | `url` | Long aliases accepted |
+| `mode` | — | **Canonical here** |
+| `upstream_mode` | — | Long alias accepted |
+| `key` | — | **Canonical here** |
+| `api_key` | — | Long alias accepted |
+| `target` | — | **Not a field** — the target name is the TOML key (`openai`) |
+
+`share` and `timeout` are numeric-only (no quotes).
+
+### `[models.*]` section-level keys (category defaults)
+
+```toml
+[models.openai]
+upstream_mode = "openai-completions"
+base_url = "https://api.openai.com"
+api_key = "sk-..."
+```
+
+Only canonical names accepted here — short names (`mode`, `base`, `key`) are
+rejected with an error surfaced in the TUI/dashboard.
+
+### Array format (legacy, still supported)
+
+```toml
+[models.openai]
+gpt-4o = ["target", "base_url", "api_key", "upstream_mode"]
+```
+
+Purely positional — no field names. 1–4 elements: target, base_url, api_key,
+mode. `base` and `url` are not valid in array form.
+
 ## Cloning
 
 `.gitmodules` points at a local relative path, so a fresh clone needs the `file`
