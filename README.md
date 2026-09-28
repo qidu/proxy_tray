@@ -1,6 +1,6 @@
 # proxy_tray
 
-A Tauri v2 tray app that supervises the `model-proxy-v3` SEA binary over
+A Tauri v2 tray app that supervises the [`model-proxy-v3`](https://github.com/qidu/model_proxy_v3) SEA binary over
 JSON-RPC 2.0 on stdio. It never proxies model traffic — clients keep talking
 HTTP to the proxy on port 8788.
 
@@ -48,7 +48,7 @@ npx --yes @tauri-apps/cli@^2 build
 # 1. Proxy: install deps and build the SEA binary.
 cd model_proxy_v3
 npm ci
-npx --yes --package=node@22 node scripts/build-sea.js   # -> dist/model-proxy-v3-macos-<arch>
+npx --yes --package=node@22 node scripts/build-sea.js   # -> dist/model-proxy-v3-<host-triple>
 
 # 2. Tray: stage the sidecar under the target-triple name externalBin needs.
 cd ..
