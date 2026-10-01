@@ -74,6 +74,22 @@
 
     <section>
       <div class="section-head">
+        <h2>Models</h2>
+        <div class="head-actions">
+          <button id="models-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <div class="model-select-row">
+        <select id="model-select" class="model-select" disabled>
+          <option value="">Select a model…</option>
+        </select>
+        <button id="test-model" class="mini" disabled>Test</button>
+      </div>
+      <pre id="model-test-result" class="empty" hidden></pre>
+    </section>
+
+    <section>
+      <div class="section-head">
         <h2>Log</h2>
         <div class="head-actions">
           <button id="log-copy" class="mini">Copy</button>

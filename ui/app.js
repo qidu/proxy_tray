@@ -18,7 +18,7 @@ let running = false;
 
 /** Lines kept in the LOG section; older lines are dropped so a chatty proxy
  *  cannot grow the DOM without bound. */
-const LOG_LINES = 500;
+const LOG_LINES = 100;
 const logLines = [];
 
 /** Show an error. Failures are never swallowed — they land on screen. */
@@ -190,7 +190,7 @@ function onNotification(frame) {
       }
       // The running proxy still holds the old config until Reload is pressed.
       const at = new Date(params.mtime).toLocaleTimeString();
-      $('config-note').textContent = `${params.path} changed on disk at ${at} — press Reload config`;
+      $('config-note').textContent = `${normalizePath(params.path)} changed on disk at ${at} — press Reload config`;
       $('config-note').hidden = false;
       break;
     }
@@ -263,10 +263,147 @@ $('log-clear').addEventListener('click', () => {
   clearSection($('log'), 'No log yet.');
 });
 
+// Model dropdown logic
+let modelsCache = [];
+
+async function loadModels() {
+  if (!running) {
+    $('model-select').disabled = true;
+    $('model-select').innerHTML = '<option value="">Proxy not running</option>';
+    $('test-model').disabled = true;
+    return;
+  }
+
+  try {
+    $('models-refresh').disabled = true;
+    $('models-refresh').textContent = 'Loading…';
+
+    const payload = await invoke('rpc_call', { method: 'models.list', params: {} });
+    modelsCache = [];
+
+    // Flatten all models from all categories
+    for (const [categoryName, category] of Object.entries(payload.models || {})) {
+      if (!category || Array.isArray(category)) continue;
+      for (const [modelKey, modelValue] of Object.entries(category)) {
+        if (RESERVED_CATEGORY_KEYS.has(modelKey)) continue;
+        const alias = Array.isArray(modelValue) ? modelValue[0] || '' : (modelValue || '');
+        const base = Array.isArray(modelValue) ? modelValue[1] || '' : '';
+        modelsCache.push({ id: modelKey, alias, base, category: categoryName });
+      }
+    }
+
+    // Also include composite aliases
+    for (const [aliasName, targets] of Object.entries(payload.composite || {})) {
+      modelsCache.push({ id: aliasName, alias: aliasName, base: '', category: 'composite', isAlias: true });
+    }
+
+    // And schedule aliases
+    for (const [aliasName, targets] of Object.entries(payload.schedule || {})) {
+      modelsCache.push({ id: aliasName, alias: aliasName, base: '', category: 'schedule', isAlias: true });
+    }
+
+    populateModelSelect();
+    $('model-select').disabled = modelsCache.length === 0;
+    $('test-model').disabled = modelsCache.length === 0;
+  } catch (err) {
+    fail('load models', err);
+    $('model-select').disabled = true;
+    $('model-select').innerHTML = '<option value="">Failed to load models</option>';
+    $('test-model').disabled = true;
+  } finally {
+    $('models-refresh').disabled = false;
+    $('models-refresh').textContent = 'Refresh';
+  }
+}
+
+function populateModelSelect() {
+  const select = $('model-select');
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">Select a model…</option>';
+
+  for (const model of modelsCache) {
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    const label = model.alias && model.alias !== model.id ? `${model.id} (${model.alias})` : model.id;
+    opt.textContent = `[${model.category}] ${label}`;
+    select.appendChild(opt);
+  }
+
+  // Restore selection if still valid
+  if (currentValue && modelsCache.some(m => m.id === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+async function testSelectedModel() {
+  const modelId = $('model-select').value;
+  if (!modelId) return;
+
+  const btn = $('test-model');
+  const resultEl = $('model-test-result');
+
+  btn.disabled = true;
+  btn.textContent = 'Testing…';
+  resultEl.hidden = true;
+  resultEl.textContent = '';
+  resultEl.className = 'empty';
+
+  const startTime = Date.now();
+  const timerInterval = setInterval(() => {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    resultEl.hidden = false;
+    resultEl.className = 'testing';
+    resultEl.textContent = `Testing ${modelId}… ${elapsed}s`;
+  }, 100);
+
+  try {
+    const result = await invoke('rpc_call', {
+      method: 'model.test',
+      params: { modelId }
+    });
+
+    clearInterval(timerInterval);
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    resultEl.hidden = false;
+    resultEl.classList.remove('empty', 'testing');
+    if (result.success) {
+      resultEl.className = 'success';
+      let msg = `✓ ${modelId}: ${result.detail || 'OK'} (${elapsedSec}s)`;
+      const u = result.usage;
+      if (u && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+        const total = u.total_tokens ?? (u.prompt_tokens + u.completion_tokens);
+        msg += ` — ${u.prompt_tokens} prompt + ${u.completion_tokens} completion = ${total} tokens`;
+      }
+      resultEl.textContent = msg;
+    } else {
+      resultEl.className = 'error';
+      resultEl.textContent = `✗ ${modelId}: ${result.detail || result.status || 'Failed'} (${elapsedSec}s)`;
+    }
+  } catch (err) {
+    clearInterval(timerInterval);
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    resultEl.hidden = false;
+    resultEl.classList.remove('empty', 'testing');
+    resultEl.className = 'error';
+    resultEl.textContent = `✗ ${modelId}: ${err && err.message ? err.message : err} (${elapsedSec}s)`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Test';
+  }
+}
+
+$('models-refresh').addEventListener('click', loadModels);
+$('model-select').addEventListener('change', () => {
+  $('test-model').disabled = !$('model-select').value;
+});
+$('test-model').addEventListener('click', testSelectedModel);
+
 listen('proxy://status', (event) => {
   renderStatus(event.payload);
   // A start/stop changes what models.list would answer, so re-read it.
   refresh();
+  loadModels();
 });
 listen('proxy://notification', (event) => onNotification(event.payload));
 listen('proxy://export', onExport);
