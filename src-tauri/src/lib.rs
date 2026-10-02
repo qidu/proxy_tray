@@ -591,6 +591,7 @@ async fn run_export(app: &AppHandle, kind: &str) {
     let flag = match kind {
         "pi" => "--export-pi-models",
         "openclaw" => "--export-openclaw-providers",
+        "dsh" => "--export-dsh",
         other => {
             let message = format!("unknown export kind {other:?}");
             eprintln!("[tray] {message}");

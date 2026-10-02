@@ -46,7 +46,7 @@ async function run(where, command, args) {
 /** Format uptime in milliseconds to a human-readable string with h/m/s/ms units. */
 function formatUptime(uptimeMs) {
   if (uptimeMs < 1000) {
-    return `up ${uptimeMs}ms`;
+    return 'just started';
   }
   const totalSeconds = Math.floor(uptimeMs / 1000);
   if (totalSeconds < 60) {
@@ -70,7 +70,7 @@ function renderStatus(status) {
   const isServing = running && activeRequests > 0;
 
   $('dot').className = `dot ${error || reloadError ? 'error' : running ? 'running' : 'stopped'}${isServing ? ' serving' : ''}`;
-  $('headline').textContent = running ? `Running on :${status.port}` : 'Stopped';
+  $('headline').textContent = running ? `Proxy running on: ${status.port}` : 'Stopped';
   $('endpoint').textContent = [
     status && status.pid ? `pid ${status.pid}` : null,
     status && status.uptimeMs !== undefined ? formatUptime(status.uptimeMs) : null,
@@ -246,9 +246,12 @@ $('toggle').addEventListener('click', () =>
 $('restart').addEventListener('click', () => run('restart', 'proxy_restart'));
 $('reload').addEventListener('click', () => run('reload config', 'reload_config'));
 $('dashboard').addEventListener('click', () => run('open dashboard', 'open_dashboard'));
-$('export-pi').addEventListener('click', () => run('export (pi)', 'export_provider', { kind: 'pi' }));
+$('export-pi').addEventListener('click', () => run('export (Pi)', 'export_provider', { kind: 'pi' }));
 $('export-openclaw').addEventListener('click', () =>
-  run('export (openclaw)', 'export_provider', { kind: 'openclaw' }),
+  run('export (OpenClaw)', 'export_provider', { kind: 'openclaw' }),
+);
+$('export-dsh').addEventListener('click', () =>
+  run('export (DSH)', 'export_provider', { kind: 'dsh' }),
 );
 
 $('export-copy').addEventListener('click', () => copySection('copy export', $('export-output')));
