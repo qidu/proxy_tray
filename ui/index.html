@@ -5,6 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Model Proxy V3 (Panel)</title>
     <link rel="stylesheet" href="style.css" />
+    <style>
+      .export-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        font-size: 13px;
+        color: var(--muted, #888);
+        background: var(--bg-secondary, #eee);
+        border: 0px solid var(--border, #ccc);
+        border-radius: 6px;
+        height: 36px;
+      }
+      .export-label .icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+    </style>
   </head>
   <body>
     <header>
@@ -44,17 +63,18 @@
     </section>
 
     <section class="row">
-      <button id="export-pi">
+      <label class="export-label">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export for Pi
+        Export for :
+      </label>
+      <button id="export-pi">
+        Pi
       </button>
       <button id="export-openclaw">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export for OpenClaw
+        OpenClaw
       </button>
       <button id="export-dsh">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export for DSH
+        DSH
       </button>
     </section>
 

@@ -302,7 +302,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<TrayMenu> {
 /// Re-derive the tray icon, tooltip and status label from the current state,
 /// then tell the window. Every state change funnels through here so the tray
 /// and the process state cannot disagree.
-fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
+async fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
     let status = state.status();
     let reload_error = state.reload_error.lock().unwrap().clone();
     let version = state.proxy_version.lock().unwrap().clone();
@@ -353,16 +353,27 @@ fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
         None => eprintln!("[tray] no tray menu in state"),
     }
 
-    let _ = app.emit(
-        "proxy://status",
-        json!({
+    // Fetch uptime from the proxy via RPC (if running) so the window gets it.
+    let uptime_ms = if state.rpc.is_attached() {
+        match Arc::clone(&state.rpc).call("status.get", json!({})).await {
+            Ok(result) => result.get("uptimeMs").and_then(|v| v.as_u64()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut payload = json!({
             "running": status.is_running(),
             "port": state.port,
             "label": label,
             "error": error,
             "reloadError": reload_error,
-        }),
-    );
+        });
+    if let Some(uptime) = uptime_ms {
+        payload["uptimeMs"] = json!(uptime);
+    }
+    let _ = app.emit("proxy://status", payload);
 }
 
 /// Spawn the sidecar and pump its stdout into the RPC client.
@@ -405,7 +416,6 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
 
     state.rpc.attach(child);
     state.set_status(ProxyStatus::Running);
-    refresh_tray(&app, &state);
 
     // Best-effort: a tray-launched proxy needs a Defender inbound rule to be
     // reachable from other hosts. Adding one needs Administrator, so a failure
@@ -450,7 +460,7 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
                     *reader_state.proxy_version.lock().unwrap() = None;
                     let expected = reader_state.stopping.swap(false, Ordering::SeqCst);
                     reader_state.set_status(exit_status(expected, payload.code, payload.signal));
-                    refresh_tray(&reader_app, &reader_state);
+                    refresh_tray(&reader_app, &reader_state).await;
                     break;
                 }
                 _ => {}
@@ -464,13 +474,69 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
     // awaiting a reply from inside it would deadlock.
     let probe_state = Arc::clone(&state);
     let probe_rpc = Arc::clone(&state.rpc);
+    let probe_app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let probe_rpc2 = Arc::clone(&probe_rpc);
         match probe_rpc.call("status.get", json!({})).await {
             Ok(result) => {
+                let uptime_ms = result.get("uptimeMs").and_then(|v| v.as_u64());
                 if let Some(version) = result.get("version").and_then(Value::as_str) {
                     *probe_state.proxy_version.lock().unwrap() = Some(version.to_string());
                 }
-                refresh_tray(&app, &probe_state);
+                // Emit the full status event with uptime now that the proxy is ready.
+                let _ = probe_app.emit(
+                    "proxy://status",
+                    json!({
+                        "running": true,
+                        "port": probe_state.port,
+                        "label": format!("Running on :{} · (ver {})", probe_state.port, probe_state.proxy_version.lock().unwrap().as_deref().unwrap_or("")),
+                        "error": Value::Null,
+                        "reloadError": probe_state.reload_error.lock().unwrap().clone(),
+                        "uptimeMs": uptime_ms,
+                    }),
+                );
+                // Also refresh the tray icon/menu.
+                refresh_tray(&probe_app, &probe_state).await;
+
+                // Spawn periodic uptime refresher: ping proxy every 10s while running.
+                let uptime_state = Arc::clone(&probe_state);
+                let uptime_rpc = probe_rpc2;
+                let uptime_app = probe_app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+                    loop {
+                        interval.tick().await;
+                        // Only refresh if proxy is still attached/running.
+                        if !uptime_state.rpc.is_attached() {
+                            break;
+                        }
+                        let rpc = Arc::clone(&uptime_rpc);
+                        match rpc.call("status.get", json!({})).await {
+                            Ok(result) => {
+                                let uptime_ms = result.get("uptimeMs").and_then(|v| v.as_u64());
+                                if let Some(version) = result.get("version").and_then(Value::as_str) {
+                                    *uptime_state.proxy_version.lock().unwrap() = Some(version.to_string());
+                                }
+                                let _ = uptime_app.emit(
+                                    "proxy://status",
+                                    json!({
+                                        "running": true,
+                                        "port": uptime_state.port,
+                                        "label": format!("Running on :{} · (ver {})", uptime_state.port, uptime_state.proxy_version.lock().unwrap().as_deref().unwrap_or("")),
+                                        "error": Value::Null,
+                                        "reloadError": uptime_state.reload_error.lock().unwrap().clone(),
+                                        "uptimeMs": uptime_ms,
+                                    }),
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!("[tray] periodic status.get failed: {err}");
+                                // If RPC fails, proxy might have died — stop the interval.
+                                break;
+                            }
+                        }
+                    }
+                });
             }
             Err(err) => eprintln!("[tray] status.get failed: {err}"),
         }
@@ -501,7 +567,11 @@ fn log_line(app: &AppHandle, line: impl AsRef<str>) {
 fn fail_start(app: &AppHandle, state: &Arc<ProxyState>, message: String) -> String {
     emit_log(app, &format!("[tray] {message}"));
     state.set_status(ProxyStatus::Failed(message.clone()));
-    refresh_tray(app, state);
+    let app_clone = app.clone();
+    let state_clone = Arc::clone(state);
+    tauri::async_runtime::spawn(async move {
+        refresh_tray(&app_clone, &state_clone).await;
+    });
     message
 }
 
@@ -509,7 +579,7 @@ fn fail_start(app: &AppHandle, state: &Arc<ProxyState>, message: String) -> Stri
 async fn stop_proxy(app: &AppHandle, state: &Arc<ProxyState>) {
     if !state.rpc.is_attached() {
         state.set_status(ProxyStatus::Stopped);
-        refresh_tray(app, state);
+        refresh_tray(app, state).await;
         return;
     }
 
@@ -528,7 +598,7 @@ async fn stop_proxy(app: &AppHandle, state: &Arc<ProxyState>) {
     }
     *state.proxy_version.lock().unwrap() = None;
     state.set_status(ProxyStatus::Stopped);
-    refresh_tray(app, state);
+    refresh_tray(app, state).await;
 }
 
 async fn restart_proxy(app: &AppHandle, state: &Arc<ProxyState>) -> Result<(), String> {
@@ -580,7 +650,7 @@ async fn reload_config_impl(app: &AppHandle, state: &Arc<ProxyState>) {
         err.to_string()
     });
     *state.reload_error.lock().unwrap() = message;
-    refresh_tray(app, state);
+    refresh_tray(app, state).await;
 }
 
 /// Run one of the CLI helpers and hand its stdout to the window.
