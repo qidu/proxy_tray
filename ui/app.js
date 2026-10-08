@@ -339,8 +339,8 @@ function populateModelSelect() {
 }
 
 async function testSelectedModel() {
-  const modelId = $('model-select').value;
-  if (!modelId) return;
+  const modelIds = Array.from($('model-select').selectedOptions).map(opt => opt.value);
+  if (!modelIds.length) return;
 
   const btn = $('test-model');
   const resultEl = $('model-test-result');
@@ -351,54 +351,77 @@ async function testSelectedModel() {
   resultEl.textContent = '';
   resultEl.className = 'empty';
 
-  const startTime = Date.now();
-  const timerInterval = setInterval(() => {
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    resultEl.hidden = false;
-    resultEl.className = 'testing';
-    resultEl.textContent = `Testing ${modelId}… ${elapsed}s`;
-  }, 100);
+  const allResults = [];
 
-  try {
-    const result = await invoke('rpc_call', {
-      method: 'model.test',
-      params: { modelId }
-    });
+  for (let i = 0; i < modelIds.length; i++) {
+    const modelId = modelIds[i];
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      resultEl.hidden = false;
+      resultEl.className = 'testing';
+      resultEl.textContent = `Testing ${modelId} (${i + 1}/${modelIds.length})… ${elapsed}s`;
+    }, 100);
 
-    clearInterval(timerInterval);
-    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+    try {
+      const result = await invoke('rpc_call', {
+        method: 'model.test',
+        params: { modelId }
+      });
 
-    resultEl.hidden = false;
-    resultEl.classList.remove('empty', 'testing');
-    if (result.success) {
-      resultEl.className = 'success';
-      let msg = `✓ ${modelId}: ${result.detail || 'OK'} (${elapsedSec}s)`;
-      const u = result.usage;
-      if (u && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
-        const total = u.total_tokens ?? (u.prompt_tokens + u.completion_tokens);
-        msg += ` — ${u.prompt_tokens} prompt + ${u.completion_tokens} completion = ${total} tokens`;
+      clearInterval(timerInterval);
+      const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      let msg, className;
+      if (result.success) {
+        className = 'success';
+        msg = `✓ ${modelId}: ${result.detail || 'OK'} (${elapsedSec}s)`;
+        const u = result.usage;
+        if (u && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+          const total = u.total_tokens ?? (u.prompt_tokens + u.completion_tokens);
+          msg += ` — ${u.prompt_tokens} prompt + ${u.completion_tokens} completion = ${total} tokens`;
+        }
+      } else {
+        className = 'error';
+        msg = `✗ ${modelId}: ${result.detail || result.status || 'Failed'} (${elapsedSec}s)`;
       }
+      allResults.push({ modelId, className, msg });
+      resultEl.className = className;
       resultEl.textContent = msg;
-    } else {
+
+      // Wait 1 second before next model (except for the last one)
+      if (i < modelIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (err) {
+      clearInterval(timerInterval);
+      const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      const msg = `✗ ${modelId}: ${err && err.message ? err.message : err} (${elapsedSec}s)`;
+      allResults.push({ modelId, className: 'error', msg });
       resultEl.className = 'error';
-      resultEl.textContent = `✗ ${modelId}: ${result.detail || result.status || 'Failed'} (${elapsedSec}s)`;
+      resultEl.textContent = msg;
+
+      // Wait 1 second before next model (except for the last one)
+      if (i < modelIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
-  } catch (err) {
-    clearInterval(timerInterval);
-    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-    resultEl.hidden = false;
-    resultEl.classList.remove('empty', 'testing');
-    resultEl.className = 'error';
-    resultEl.textContent = `✗ ${modelId}: ${err && err.message ? err.message : err} (${elapsedSec}s)`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Test';
   }
+
+  // Show summary if multiple models tested
+  if (modelIds.length > 1) {
+    const summary = allResults.map(r => r.msg).join('\n');
+    resultEl.textContent = summary;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Test now';
 }
 
 $('models-refresh').addEventListener('click', loadModels);
 $('model-select').addEventListener('change', () => {
-  $('test-model').disabled = !$('model-select').value;
+  const hasSelection = $('model-select').selectedOptions.length > 0;
+  $('test-model').disabled = !hasSelection;
 });
 $('test-model').addEventListener('click', testSelectedModel);
 

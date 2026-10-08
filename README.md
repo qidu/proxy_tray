@@ -38,10 +38,6 @@ Homebrew's Node is a thin launcher with SEA compiled out. Both sequences below
 therefore build under `npx --yes --package=node@22`, which fetches an official
 Node without touching the system install.
 
-```
-npx --yes @tauri-apps/cli@^2 build
-```
-
 ### macOS
 
 ```sh
@@ -132,7 +128,7 @@ printf '{"jsonrpc":"2.0","method":"status.get","params":{},"id":1}\n' \
 A silent control channel means the binary predates `--rpc`. The submodule
 **source** now carries it (`src/rpc.ts`, commit `fe3635b`), so a SEA rebuilt
 from the submodule is fine — but that commit sits on
-`origin/feature/targeting_failover`, not `origin/main`:
+`origin/feature/targeting_failover`, not `origin/main` (current submodule HEAD is `fe3635b`):
 
 ```sh
 git -C model_proxy_v3 merge-base --is-ancestor fe3635b origin/main   # false today
@@ -157,6 +153,17 @@ Finder-launched `.app` inherits no environment at all — env-only would leave i
 stuck on the defaults. The tray reads the block once at startup and forwards
 both values to the sidecar, so the window and the proxy can never disagree about
 which port or config is live.
+
+## UI Features
+
+### Export Buttons
+The window provides three export actions that invoke the proxy's CLI:
+- **Export for Pi** — `--export-pi-models`
+- **Export for OpenClaw** — `--export-openclaw-providers`
+- **Export for DSH** — `--export-dsh`
+
+### Model Testing
+The model selector supports **multi-select** (hold Ctrl/Cmd to choose multiple). Clicking **Test now** runs `model.test` sequentially for each selected model, showing per-model results with latency and token usage, then a summary.
 
 The proxy has **no** port setting of its own: it reads `PORT` from the
 environment (`server.ts:13`), so the tray's value is the only knob. A
