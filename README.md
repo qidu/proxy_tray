@@ -22,12 +22,21 @@ The design this implements is `docs/design_tauri_tray.md` in the
 The tray ships the proxy, so the proxy must be built first. Both are built from
 source on their own platform — nothing is cross-compiled.
 
+The build runs in four steps, and the first is installing the toolchain (Rust
+via [rustup](https://rust-lang.org/tools/install/), the C/C++ toolchain, and
+Node.js — see [Dependencies](#dependencies)):
+
+1. Install Rust (`rustc` + `cargo`), Node.js, and the C/C++ toolchain.
+2. Build the proxy SEA binary.
+3. Stage the sidecar into `src-tauri/binaries/`.
+4. Build the tray.
+
 ### Dependencies
 
 | Tool | macOS | Windows |
 | --- | --- | --- |
 | Node.js | any modern Node for `npm ci` | same |
-| Rust | `rustup` (host target) | `rustup default stable-x86_64-pc-windows-msvc` — MSVC, not GNU |
+| Rust | [rustup](https://rust-lang.org/tools/install/) (host target) | `rustup default stable-x86_64-pc-windows-msvc` — MSVC, not GNU |
 | C/C++ toolchain | Xcode Command Line Tools: `xcode-select --install` | Visual Studio Build Tools, "Desktop development with C++" (supplies `link.exe`) |
 | Tauri CLI | `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | same |
 | WebView2 | not needed (WKWebView) | preinstalled on Win 10/11, else the Evergreen bootstrapper |
@@ -42,13 +51,16 @@ Node without touching the system install.
 
 ```sh
 # 1. Proxy: install deps and build the SEA binary.
-cd model_proxy_v3
+cd submodules/model_proxy_v3
 npm ci
 npx --yes --package=node@22 node scripts/build-sea.js   # -> dist/model-proxy-v3-<host-triple>
 
 # 2. Tray: stage the sidecar under the target-triple name externalBin needs.
 cd ..
 bash scripts/stage-sidecar.sh
+#    Or by hand (Apple Silicon):
+#    mkdir src-tauri/binaries
+#    cp submodules/model_proxy_v3/dist/model-proxy-v3-aarch64-apple-darwin src-tauri/binaries/
 
 # 3. Tray: build (or `cargo tauri dev` for a dev run).
 cargo tauri build
