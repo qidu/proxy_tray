@@ -1,8 +1,8 @@
 // Regenerates src-tauri/icons/*.png and icon.ico.
 //
 // The tray icon is the app's only status surface when the window is hidden, so
-// the three states must be distinguishable at icon size: they are one hollow
-// circle each, differing only in colour (design doc §5).
+// the three states must be distinguishable at icon size: each is the same
+// concentric-ring mark, differing only in colour (design doc §5).
 //
 // Run: node scripts/make-icons.mjs
 
@@ -139,31 +139,37 @@ function encodeIco(images) {
 }
 
 /**
- * A hollow circle (ring), anti-aliased by treating the distance from the centre
- * as pixel coverage. The stroke is a fixed fraction of the size so the ring
- * keeps the same weight at every resolution. One pixel of feathering is enough
- * at 32px.
+ * Concentric rings: an outer ring in the status colour with a lighter inner
+ * ring inside, and a clear centre. The mark is inset from the canvas so it does
+ * not touch the edges. Anti-aliased by treating the distance from the centre as
+ * pixel coverage, so the rings keep the same weight at every resolution.
  */
 function ring(size, [r, g, b]) {
   const rgba = Buffer.alloc(size * size * 4);
   const c = (size - 1) / 2;
-  const outer = size / 2 - 1;
-  const stroke = Math.max(2, Math.round(size * 0.12));
-  const inner = outer - stroke;
+  const outer = size * 0.42; // outermost edge of the colour ring
+  const band = Math.max(1.5, size * 0.11); // thickness of each ring
+  const mid = outer - band; // colour ring's inner edge = lighter ring's outer edge
+  const inner = mid - band; // lighter ring's inner edge; the centre stays clear
 
+  // The inner ring is the same hue mixed toward white, so it reads as lighter.
+  const tint = (v) => Math.round(v + (255 - v) * 0.45);
+  const light = [tint(r), tint(g), tint(b)];
+
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const dist = Math.hypot(x - c, y - c);
-      // Feather both edges, then take the tighter one: coverage is zero
-      // outside the outer edge and inside the hole.
-      const outside = Math.min(1, Math.max(0, outer + 0.5 - dist));
-      const inside = Math.min(1, Math.max(0, dist - inner + 0.5));
+      // Feather the outer edge and the hole; coverage is zero outside either.
+      const outside = clamp01(outer + 0.5 - dist);
+      const inside = clamp01(dist - inner + 0.5);
       const coverage = Math.min(outside, inside);
       if (coverage === 0) continue;
+      const [cr, cg, cb] = dist <= mid ? light : [r, g, b];
       const i = (y * size + x) * 4;
-      rgba[i] = r;
-      rgba[i + 1] = g;
-      rgba[i + 2] = b;
+      rgba[i] = cr;
+      rgba[i + 1] = cg;
+      rgba[i + 2] = cb;
       rgba[i + 3] = Math.round(coverage * 255);
     }
   }

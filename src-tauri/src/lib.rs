@@ -266,9 +266,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<TrayMenu> {
 
     let export_pi = MenuItemBuilder::with_id("export_pi", "for pi").build(app)?;
     let export_openclaw = MenuItemBuilder::with_id("export_openclaw", "for openclaw").build(app)?;
+    let export_dsh = MenuItemBuilder::with_id("export_dsh", "for dsh").build(app)?;
     let export = SubmenuBuilder::with_id(app, "export", "Export Provider Config")
         .item(&export_pi)
         .item(&export_openclaw)
+        .item(&export_dsh)
         .build()?;
 
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -793,6 +795,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             }
             "export_pi" => run_export(&app, "pi").await,
             "export_openclaw" => run_export(&app, "openclaw").await,
+            "export_dsh" => run_export(&app, "dsh").await,
             "quit" => {
                 stop_proxy(&app, &state).await;
                 app.exit(0);
