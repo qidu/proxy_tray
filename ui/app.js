@@ -328,7 +328,9 @@ function populateModelSelect() {
     const opt = document.createElement('option');
     opt.value = model.id;
     const label = model.alias && model.alias !== model.id ? `${model.id} (${model.alias})` : model.id;
-    opt.textContent = `[${model.category}] ${label}`;
+    const baseLabel = `[${model.category}] ${label}`;
+    opt.dataset.baseLabel = baseLabel;
+    opt.textContent = baseLabel;
     select.appendChild(opt);
   }
 
@@ -336,12 +338,35 @@ function populateModelSelect() {
   if (currentValue && modelsCache.some(m => m.id === currentValue)) {
     select.value = currentValue;
   }
+
+  updateOptionChecks();
 }
 
+/** Suffix a check onto each selected option's label, clear it on the rest. */
+function updateOptionChecks() {
+  for (const opt of $('model-select').options) {
+    if (!opt.dataset.baseLabel) continue;
+    opt.textContent = opt.selected ? `${opt.dataset.baseLabel} ✓` : opt.dataset.baseLabel;
+  }
+}
+
+/** Re-run the selection on this cadence while "Pin 300s" stays checked. */
+const PIN_INTERVAL_MS = 300_000;
+
+/** Set while a test pass is in flight so a pinned tick cannot overlap it. */
+let testingInProgress = false;
+let pinTimer = null;
+
 async function testSelectedModel() {
-  const modelIds = Array.from($('model-select').selectedOptions).map(opt => opt.value);
+  // A 300s tick fires unconditionally; skip it if a pass is still running.
+  if (testingInProgress) return;
+
+  const modelIds = Array.from($('model-select').selectedOptions)
+    .map(opt => opt.value)
+    .filter(Boolean);
   if (!modelIds.length) return;
 
+  testingInProgress = true;
   const btn = $('test-model');
   const resultEl = $('model-test-result');
 
@@ -416,14 +441,35 @@ async function testSelectedModel() {
 
   btn.disabled = false;
   btn.textContent = 'Test now';
+  testingInProgress = false;
 }
 
 $('models-refresh').addEventListener('click', loadModels);
 $('model-select').addEventListener('change', () => {
   const hasSelection = $('model-select').selectedOptions.length > 0;
   $('test-model').disabled = !hasSelection;
+  updateOptionChecks();
 });
-$('test-model').addEventListener('click', testSelectedModel);
+/** Stop the pinned repeat and uncheck the display-only box. */
+function clearPin() {
+  if (pinTimer !== null) {
+    clearInterval(pinTimer);
+    pinTimer = null;
+  }
+  $('pin-test').checked = false;
+}
+
+$('test-model').addEventListener('click', () => {
+  if (pinTimer !== null) {
+    // Pressed while pinned: stop the repeat.
+    clearPin();
+    return;
+  }
+  // Start pinned testing: run now, then repeat every 300s.
+  testSelectedModel();
+  pinTimer = setInterval(testSelectedModel, PIN_INTERVAL_MS);
+  $('pin-test').checked = true;
+});
 
 listen('proxy://status', (event) => {
   renderStatus(event.payload);

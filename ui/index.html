@@ -62,6 +62,35 @@
       </button>
     </section>
 
+    <section>
+      <h2>Config</h2>
+      <code id="config-path" class="path"></code>
+      <p id="config-note" class="note" hidden></p>
+      <p id="reload-error" class="error" hidden></p>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Models</h2>
+        <div class="head-actions">
+          <button id="models-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <div class="model-select-row">
+        <select id="model-select" class="model-select" disabled multiple>
+          <option value="">Choose one or more models …</option>
+        </select>
+        <div class="model-side">
+          <button id="test-model" class="mini" disabled>Test now</button>
+          <label class="pin-row" title="Started by the Test now button">
+            <input type="checkbox" id="pin-test" disabled />
+            Pin 300s
+          </label>
+        </div>
+      </div>
+      <pre id="model-test-result" class="empty" hidden></pre>
+    </section>
+
     <section class="row">
       <label class="export-label">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -79,13 +108,6 @@
     </section>
 
     <section>
-      <h2>Config</h2>
-      <code id="config-path" class="path"></code>
-      <p id="config-note" class="note" hidden></p>
-      <p id="reload-error" class="error" hidden></p>
-    </section>
-
-    <section>
       <div class="section-head">
         <h2>Export output</h2>
         <div class="head-actions">
@@ -94,22 +116,6 @@
         </div>
       </div>
       <pre id="export-output" class="empty">No export yet.</pre>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <h2>Models</h2>
-        <div class="head-actions">
-          <button id="models-refresh" class="mini">Refresh</button>
-        </div>
-      </div>
-      <div class="model-select-row">
-        <select id="model-select" class="model-select" disabled multiple>
-          <option value="">Choose one or more models …</option>
-        </select>
-        <button id="test-model" class="mini" disabled>Test now</button>
-      </div>
-      <pre id="model-test-result" class="empty" hidden></pre>
     </section>
 
     <section>

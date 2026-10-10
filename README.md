@@ -175,7 +175,13 @@ The window provides three export actions that invoke the proxy's CLI:
 - **Export for DSH** — `--export-dsh`
 
 ### Model Testing
-The model selector supports **multi-select** (hold Ctrl/Cmd to choose multiple). Clicking **Test now** runs `model.test` sequentially for each selected model, showing per-model results with latency and token usage, then a summary.
+The model selector supports **multi-select** (hold Ctrl/Cmd to choose multiple);
+selected options are marked with a **✓**. Clicking **Test now** starts a
+**pinned** run: it runs `model.test` sequentially for each selected model —
+showing per-model results with latency and token usage, then a summary — and
+repeats every **300s**. Clicking **Test now** again stops the repeat. The
+**Pin 300s** checkbox is a display-only indicator of whether the pinned run is
+active; it is not clickable.
 
 The proxy has **no** port setting of its own: it reads `PORT` from the
 environment (`server.ts:13`), so the tray's value is the only knob. A

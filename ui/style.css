@@ -242,6 +242,28 @@ pre.empty {
   cursor: not-allowed;
 }
 
+.model-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  flex: none;
+}
+
+.pin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.pin-row input {
+  margin: 0;
+}
+
 #model-test-result {
   margin: 0;
   padding: 8px 10px;
