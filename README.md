@@ -38,8 +38,16 @@ Node.js — see [Dependencies](#dependencies)):
 | Node.js | any modern Node for `npm ci` | same |
 | Rust | [rustup](https://rust-lang.org/tools/install/) (host target) | `rustup default stable-x86_64-pc-windows-msvc` — MSVC, not GNU |
 | C/C++ toolchain | Xcode Command Line Tools: `xcode-select --install` | Visual Studio Build Tools, "Desktop development with C++" (supplies `link.exe`) |
-| Tauri CLI | `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | same |
+| Tauri CLI | `cargo install tauri-cli --locked` or `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | same |
 | WebView2 | not needed (WKWebView) | preinstalled on Win 10/11, else the Evergreen bootstrapper |
+
+Key locked crate versions (see `src-tauri/Cargo.lock`; `cargo update` refreshes them):
+
+| Crate | Locked at | Note |
+| --- | --- | --- |
+| `tauri` | 2.12.4 | pulls `tray-icon`, `wry`, `tao` |
+| `tray-icon` | 0.25.1 | **must stay ≥ 0.25.1**: 0.24.x never receives left clicks on macOS 27, so the tray click that opens the window silently does nothing |
+| `wry` / `tao` | 0.57.0 / 0.37.1 | WebView / windowing, pulled by `tauri` |
 
 The SEA build needs an **official** Node (nodejs.org, nvm,
 `actions/setup-node`): the binary is a copy of the Node that built it, and
