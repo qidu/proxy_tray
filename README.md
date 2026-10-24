@@ -167,8 +167,8 @@ printf '{"jsonrpc":"2.0","method":"status.get","params":{},"id":1}\n' \
 
 A silent control channel means the binary predates `--rpc`. The submodule source
 has carried it since `fe3635b` (`src/rpc.ts`), and the pinned commit
-`b843a6a5` is 56 commits past that on `origin/feature/targeting_failover`, so a
-SEA rebuilt from the submodule is fine.
+`c2f4dcb8` (`v2.8.1-1-gc2f4dcb`) is 68 commits past that on
+`origin/feature/targeting_failover`, so a SEA rebuilt from the submodule is fine.
 
 `.gitmodules` pins `branch = feature/targeting_failover`, so `git submodule
 update --remote` follows that branch. Without the pin it would follow
@@ -192,7 +192,7 @@ Per platform, the job:
 1. Rewrites `git@github.com:` to `https://github.com/` globally, before checkout:
    `.gitmodules` declares the submodule over SSH and the runner has no key. The
    repository is public, so no secret is involved.
-2. Checks out with `submodules: true` — not `recursive`, since the four nested
+2. Checks out with `submodules: true` — not `recursive`, since the five nested
    submodules are unused here.
 3. Runs `npm install --omit=optional --ignore-scripts` and `npm run build:native`
    in the submodule. `npm ci` is impossible there: no lockfile is committed.
@@ -289,12 +289,21 @@ gpt-4o = {target = "openai", base_url = "https://api.openai.com", api_key = "sk-
 
 `url` is **not** accepted — use `base_url` or `base`.
 
-### `[passthrough]` inline tables (passthrough targets)
+`transforms` (a comma-separated transform list) and `max_tokens` (a bare number)
+are also read from inline tables; both are optional.
+
+### `[models.passthrough]` inline tables (passthrough targets)
 
 ```toml
-[passthrough]
+[models.passthrough]
 openai = {base = "https://api.openai.com", key = "sk-...", mode = "openai-completions", share = 1}
 ```
+
+A bare `[passthrough]` is **not** a section — it is an unknown header, so a
+config still using one has its targets silently ignored (the loader warns about
+an unknown section). `[models.passthrough.<name>]` sub-sections are unsupported
+too: every target must be an inline table directly under
+`[models.passthrough]`.
 
 | Canonical | Short alias | Notes |
 | --- | --- | --- |
@@ -327,8 +336,21 @@ rejected with an error surfaced in the TUI/dashboard.
 gpt-4o = ["target", "base_url", "api_key", "upstream_mode"]
 ```
 
-Purely positional — no field names. 1–4 elements: target, base_url, api_key,
-mode. `base` and `url` are not valid in array form.
+Purely positional — no field names. Accepted lengths are 1, 3, 4, 5 and 6; a
+2-element array is rejected, and so is a 7th element. The positions are:
+
+| Index | Field |
+| --- | --- |
+| 0 | `target` |
+| 1 | `base_url` |
+| 2 | `api_key` |
+| 3 | `mode` |
+| 4 | `transforms` (CSV) |
+| 5 | `max_tokens` (bare number) |
+
+So `[target]`, `[target, base_url, api_key]`, then optionally `mode`, then
+`transforms`, then `max_tokens`, in that order. `base` and `url` are not valid in
+array form.
 
 ## Cloning
 
@@ -347,7 +369,7 @@ git submodule update --init                                                     
 git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init    # without
 ```
 
-`--init` is enough — not `--recursive`: `model_proxy_v3` has four nested
+`--init` is enough — not `--recursive`: `model_proxy_v3` has five nested
 submodules, but nothing built here imports them. `build-sea.js` marks exactly
 one external (`@github/keytar`), and every `submodules/` mention under `src/` is
 a comment.
