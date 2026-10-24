@@ -4,7 +4,7 @@ A Tauri v2 tray app that supervises the [`model-proxy-v3`](https://github.com/qi
 JSON-RPC 2.0 on stdio. It never proxies model traffic — clients keep talking
 HTTP to the proxy on port 8788.
 
-The design this implements is `docs/design_tauri_tray.md` in the
+The design this implements is `docs/architecture/design_tauri_tray.md` in the
 `submodules/model_proxy_v3` submodule.
 
 ## Layout
@@ -13,9 +13,10 @@ The design this implements is `docs/design_tauri_tray.md` in the
 | --- | --- |
 | `submodules/model_proxy_v3/` | git submodule — the proxy this app supervises |
 | `ui/` | the window's frontend (`frontendDist`), vanilla HTML/JS, no bundler |
-| `scripts/stage-sidecar.sh` | copies the built SEA binary into `src-tauri/binaries/` |
-| `scripts/make-icons.mjs` | regenerates `src-tauri/icons/*.png` |
+| `scripts/stage-sidecar.sh` | copies the built SEA binary (path given as its argument) into `src-tauri/binaries/` |
+| `scripts/make-icons.mjs` | regenerates `src-tauri/icons/*.png` and `icon.ico` |
 | `src-tauri/` | the Rust core: tray, supervisor, JSON-RPC client |
+| `.github/workflows/ci.yml` | builds the sidecar, lints, tests, and bundles on macOS and Windows (see [CI](#ci)) |
 
 ## How to build
 
@@ -35,7 +36,7 @@ Node.js — see [Dependencies](#dependencies)):
 
 | Tool | macOS | Windows |
 | --- | --- | --- |
-| Node.js | any modern Node for `npm ci` | same |
+| Node.js | any modern Node (`engines` says `>=19`; the SEA build itself uses `node@22`) | same |
 | Rust | [rustup](https://rust-lang.org/tools/install/) (host target) | `rustup default stable-x86_64-pc-windows-msvc` — MSVC, not GNU |
 | C/C++ toolchain | Xcode Command Line Tools: `xcode-select --install` | Visual Studio Build Tools, "Desktop development with C++" (supplies `link.exe`) |
 | Tauri CLI | `cargo install tauri-cli --locked` or `cargo install tauri-cli --version "^2"` (or `npx @tauri-apps/cli@^2`) | same |
@@ -55,19 +56,30 @@ Homebrew's Node is a thin launcher with SEA compiled out. Both sequences below
 therefore build under `npx --yes --package=node@22`, which fetches an official
 Node without touching the system install.
 
+No lockfile is committed in the submodule at the pinned commit, so `npm ci`
+fails there — use `npm install --omit=optional --ignore-scripts`, which is what
+the submodule's own `Dockerfile` does. `--omit=optional` skips the
+`@github/keytar` git-URL dependency (the SEA excludes it anyway) and
+`--ignore-scripts` its `prebuild-install`. No production dependency needs an
+install script.
+
 ### macOS
 
 ```sh
 # 1. Proxy: install deps and build the SEA binary.
 cd submodules/model_proxy_v3
-npm ci
-npx --yes --package=node@22 node scripts/build-sea.js   # -> dist/model-proxy-v3-<host-triple>
+npm install --omit=optional --ignore-scripts
+npm run build:native   # = npx --yes --package=node@22 node scripts/build-sea.js
+                       # -> dist/model-proxy-v3-<host-triple>
 
 # 2. Tray: stage the sidecar under the target-triple name externalBin needs.
-cd ..
-bash scripts/stage-sidecar.sh
+cd ../..
+bash scripts/stage-sidecar.sh \
+  "submodules/model_proxy_v3/dist/model-proxy-v3-$(rustc --print host-tuple)"
+#    The path is not optional — the script's own fallbacks look for a sibling
+#    model_proxy_v3/, never submodules/model_proxy_v3/ (see below).
 #    Or by hand (Apple Silicon):
-#    mkdir src-tauri/binaries
+#    mkdir -p src-tauri/binaries
 #    cp submodules/model_proxy_v3/dist/model-proxy-v3-aarch64-apple-darwin src-tauri/binaries/
 
 # 3. Tray: build (or `cargo tauri dev` for a dev run).
@@ -80,31 +92,33 @@ Run every step on Windows — SEA embeds a copy of the Node that built it, so a
 `dist/model-proxy-v3-x86_64-apple-darwin` is useless here.
 
 ```
-:: 1. Clone with the submodule (the file transport needs enabling; see Cloning).
-git -c protocol.file.allow=always submodule update --init
+:: 1. Clone with the submodule (see Cloning).
+git submodule update --init
 
 :: 2. Proxy: install deps and build the SEA binary.
-cd model_proxy_v3
-npm ci
-npx --yes --package=node@22 node scripts\build-sea.js   :: -> dist\model-proxy-v3-x86_64-pc-windows-msvc.exe
+::    npm run build:native = npx --yes --package=node@22 node scripts\build-sea.js
+::    -> dist\model-proxy-v3-x86_64-pc-windows-msvc.exe
+cd submodules\model_proxy_v3
+npm install --omit=optional --ignore-scripts
+npm run build:native
+cd ..\..
 
-:: 3. Stage the sidecar by hand — build-sea.js already names the binary with
-::    the host triple, so copy it to the externalBin location with the same name.
-rustc --print host-tuple                                :: x86_64-pc-windows-msvc
-copy model_proxy_v3\dist\model-proxy-v3-x86_64-pc-windows-msvc.exe ^
+:: 3. Stage the sidecar by hand — build-sea.js already names the binary with the
+::    host triple, so copy it to the externalBin location under the same name.
+::    (scripts\stage-sidecar.sh works too, but only under bash, and it writes the
+::    destination without the .exe that tauri-utils appends on Windows.)
+::    `rustc --print host-tuple` should print x86_64-pc-windows-msvc.
+rustc --print host-tuple
+mkdir src-tauri\binaries 2>nul
+copy submodules\model_proxy_v3\dist\model-proxy-v3-x86_64-pc-windows-msvc.exe ^
      src-tauri\binaries\model-proxy-v3-x86_64-pc-windows-msvc.exe
 
-:: 4. Generate the Windows icon. Not optional: tauri-build writes the
-::    executable's resource from src-tauri\icons\icon.ico and fails without it.
-node scripts\make-icons.mjs
-
-:: 5. From the project root (the directory holding src-tauri\), not src-tauri\.
+:: 4. From the project root (the directory holding src-tauri\), not src-tauri\.
 cargo tauri build
 ```
 
-Before step 5, apply the three `tauri.conf.json` edits under
-[Config edits](#config-edits) below — the macOS defaults point at macOS paths
-and the wrong icon set.
+No `tauri.conf.json` edit is needed — the committed config is already
+cross-platform (see [Config edits](#config-edits)).
 
 ### The `externalBin` naming rule
 
@@ -121,43 +135,77 @@ directory, and leave the file named `model-proxy-v3` — no target-triple suffix
 i.e. no arch-system-platform (`-x86_64-apple-darwin`,
 `-x86_64-pc-windows-msvc`). Tauri supplies the host's triple itself.
 
-Get the triple with `rustc --print host-tuple`. `scripts/build-sea.js` now emits
-the triple name directly (e.g. `model-proxy-v3-x86_64-apple-darwin`), so no
-rename is needed — `stage-sidecar.sh` copies it under the same name.
+Get the triple with `rustc --print host-tuple`. `scripts/build-sea.js` emits the
+triple name directly (e.g. `model-proxy-v3-x86_64-apple-darwin`), so no rename
+is needed on macOS — `stage-sidecar.sh` copies it under the same name. On
+Windows it does need the `.exe` that `build-sea.js` emits and Tauri looks for;
+the script writes its destination without one, so copy that file by hand (the
+sequence above does).
 
 Once copied into the build, the triple is stripped again: the sidecar is
 `target/{debug,release}/model-proxy-v3`, and inside the bundle
-`proxy-tray.app/Contents/MacOS/model-proxy-v3`.
+`Proxy-tray.app/Contents/MacOS/model-proxy-v3` (`productName` is `Proxy-tray`).
 
 `cargo check` **requires** the staged sidecar: `tauri_build::build()` copies
 `externalBin` during `build.rs` and errors on a missing file.
 
 ### Where the staged sidecar comes from
 
-`scripts/stage-sidecar.sh` prefers the submodule's own `dist/`, then falls back
-to the sibling checkout's. The submodule is a fresh clone whose `dist/` is
-empty, so the staged binary is normally the sibling's. It must include `--rpc`;
-check with:
+`scripts/stage-sidecar.sh` takes the built SEA binary as its only argument.
+Pass it explicitly: the script's no-argument fallbacks look for
+`model_proxy_v3/dist/` and `../model_proxy_v3/dist/`, and the submodule lives at
+`submodules/model_proxy_v3/dist/`, so a bare invocation finds nothing and exits
+1. A fresh submodule clone also has an empty `dist/` until you build there, so
+the staged binary is often a sibling checkout's instead. Either is fine as long
+as it includes `--rpc`; check with:
 
 ```sh
 printf '{"jsonrpc":"2.0","method":"status.get","params":{},"id":1}\n' \
-  | PORT=18788 PROXY_CONFIG_PATH="$PWD/model_proxy_v3/proxy_config.toml" \
+  | PORT=18788 PROXY_CONFIG_PATH="$PWD/submodules/model_proxy_v3/proxy_config.toml" \
     ./src-tauri/binaries/model-proxy-v3-x86_64-apple-darwin --rpc
 ```
 
-A silent control channel means the binary predates `--rpc`. The submodule
-**source** now carries it (`src/rpc.ts`, commit `fe3635b`), so a SEA rebuilt
-from the submodule is fine — but that commit sits on
-`origin/feature/targeting_failover`, not `origin/main` (current submodule HEAD is `fe3635b`):
-
-```sh
-git -C model_proxy_v3 merge-base --is-ancestor fe3635b origin/main   # false today
-```
+A silent control channel means the binary predates `--rpc`. The submodule source
+has carried it since `fe3635b` (`src/rpc.ts`), and the pinned commit
+`b843a6a5` is 56 commits past that on `origin/feature/targeting_failover`, so a
+SEA rebuilt from the submodule is fine.
 
 `.gitmodules` pins `branch = feature/targeting_failover`, so `git submodule
-update --remote` follows that branch and lands on `fe3635b`. Without the pin it
-would follow `origin/HEAD`, and if that ever moved to `main`, `--remote` would
-check out a commit without `--rpc` and the tray would lose its control channel.
+update --remote` follows that branch. Without the pin it would follow
+`origin/HEAD`, and if that ever moved to `main`, `--remote` could check out a
+commit without `--rpc` and the tray would lose its control channel.
+
+## CI
+
+`.github/workflows/ci.yml` runs on push to `main`, on pull requests, on
+`workflow_dispatch`, and on `release: published` — the last one is the hook for
+the web UI's **Create a new release** button, so publishing a release there
+builds the installers and attaches them without anything pushed by hand.
+
+Each runner builds its own sidecar, because a SEA binary is a copy of the Node
+that produced it and cannot be cross-compiled. `macos-latest` is arm64, so the
+macOS artifacts are arm64-only; an Intel or universal `.dmg` needs an Intel
+runner.
+
+Per platform, the job:
+
+1. Rewrites `git@github.com:` to `https://github.com/` globally, before checkout:
+   `.gitmodules` declares the submodule over SSH and the runner has no key. The
+   repository is public, so no secret is involved.
+2. Checks out with `submodules: true` — not `recursive`, since the four nested
+   submodules are unused here.
+3. Runs `npm install --omit=optional --ignore-scripts` and `npm run build:native`
+   in the submodule. `npm ci` is impossible there: no lockfile is committed.
+4. Stages the sidecar, and on Windows adds the `.exe` suffix `stage-sidecar.sh`
+   omits.
+5. Runs `cargo fmt --all --check` (macOS only — formatting is a property of the
+   source), `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+6. On every event but a pull request, runs `tauri build` and uploads the `.dmg` /
+   `.msi` / `-setup.exe` as a workflow artifact; on a published release it also
+   attaches them to that release.
+
+The `.app` is uploaded only inside the `.dmg`: `upload-artifact` preserves
+neither permissions nor symlinks, so an extracted `.app` comes back broken.
 
 ## Configuration
 
@@ -284,12 +332,25 @@ mode. `base` and `url` are not valid in array form.
 
 ## Cloning
 
-`.gitmodules` points at a local relative path, so a fresh clone needs the `file`
-transport explicitly enabled:
+`.gitmodules` declares the submodule with an SSH URL
+(`git@github.com:qidu/model_proxy_v3.git`) — no local path, so the `file`
+transport is not involved. Initializing it therefore needs GitHub SSH auth; both
+repositories are public, so a redirect to HTTPS is the fallback:
 
 ```sh
-git -c protocol.file.allow=always submodule update --init
+# fresh clone — put `-c url."https://github.com/".insteadOf="git@github.com:"`
+# before `clone` if you have no SSH key
+git clone --recurse-submodules https://github.com/qidu/proxy_tray.git
+
+# existing clone
+git submodule update --init                                                            # with an SSH key
+git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init    # without
 ```
+
+`--init` is enough — not `--recursive`: `model_proxy_v3` has four nested
+submodules, but nothing built here imports them. `build-sea.js` marks exactly
+one external (`@github/keytar`), and every `submodules/` mention under `src/` is
+a comment.
 
 ## Windows
 
@@ -297,10 +358,11 @@ Run the whole sequence under [How to build](#how-to-build) on Windows — SEA
 embeds a copy of the Node that built it, so it **cannot cross-compile**. What
 follows is Windows-specific.
 
-- **The icon is mandatory.** `tauri-build` writes the executable's Windows
-  resource from `src-tauri\icons\icon.ico` and fails with
-  `icons/icon.ico not found` without it; `scripts\make-icons.mjs` writes it
-  (16/32/48/256, the same ring as `icon.png`). The macOS build does not use the
+- **The icon is committed.** `src-tauri\icons\icon.ico` is tracked and listed in
+  `bundle.icon`, so a fresh clone builds as-is — `tauri-build` writes the
+  executable's Windows resource from it. Run `node scripts\make-icons.mjs` only
+  after changing the ring art: it rewrites `icon.png`, the three tray PNGs, and
+  the `.ico` (16/32/48/256, the same ring). The macOS build does not use the
   `.ico`.
 - **Run `cargo tauri` from the project root** — the directory that holds
   `src-tauri/`, not `src-tauri/` itself: `cargo tauri` locates `src-tauri` by
@@ -310,20 +372,21 @@ follows is Windows-specific.
 
 ### Config edits
 
-Two values in `src-tauri\tauri.conf.json` are macOS-specific and must change:
+None are needed. `src-tauri\tauri.conf.json` is already cross-platform: the same
+file builds on macOS and on Windows.
 
-| Key | Now (macOS) | Windows |
+| Key | Value | Why it works on both |
 | --- | --- | --- |
-| `bundle.externalBin` | an absolute macOS path | `["binaries/model-proxy-v3"]` — untagged and relative; Tauri appends `-<triple>.exe` |
-| `bundle.icon` | `["icons/icon.png"]` | add `"icons/icon.ico"` |
+| `bundle.externalBin` | `["binaries/model-proxy-v3"]` | relative and untagged — Tauri appends `-<triple>`, plus `.exe` on Windows |
+| `bundle.icon` | `["icons/icon.png", "icons/icon.ico"]` | Tauri picks whichever the platform's bundler wants |
+
+`externalBin` must stay relative and untagged: Tauri resolves it against
+`src-tauri` and then appends the triple. An absolute path, or one that already
+carries the triple, is wrong (see the naming rule above).
 
 `plugins."proxy-tray".configPath` needs no per-platform value: it is absent by
 default and the tray falls back to `~/.config/model-proxy-v3/proxy_config.toml`,
 which is the same on every platform.
-
-`externalBin` is relative on every platform: Tauri resolves it against
-`src-tauri` and then appends the triple. An absolute path, or one that already
-carries the triple, is wrong (see the naming rule above).
 
 ### Runtime caveats
 

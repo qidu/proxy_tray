@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The hook for the web UI's "Create a new release" button — it fires on Publish,
+  # and covers `gh release create` and the REST API too. A tag-push trigger would
+  # miss a release pointed at a tag that already existed, since nothing is pushed
+  # in that case.
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One job per OS rather than a lint job plus a bundle job: every path here needs
+  # the real sidecar anyway (build.rs refuses to run without it), so splitting
+  # would build the same ~120 MB SEA binary twice per runner.
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64, so this produces an arm64 app only. The sidecar
+        # cannot be cross-compiled (see below), which rules out a universal
+        # macOS bundle until an Intel runner is available again.
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        # Uniform shell across runners; Windows would otherwise default to pwsh.
+        shell: bash
+    steps:
+      # --- sidecar prerequisites ------------------------------------------------
+
+      # model_proxy_v3 is public, but .gitmodules declares it over SSH
+      # (git@github.com:...), which a runner has no key for. Rewrite to HTTPS
+      # before checkout so `submodules: true` can clone anonymously. Must come
+      # before actions/checkout.
+      - name: Point SSH submodule URLs at HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Check out proxy_tray
+        uses: actions/checkout@v4
+        with:
+          # Not `recursive`: nothing under src/ imports the four nested
+          # submodules (the submodules/ references there are comments), and
+          # build-sea.js marks exactly one external — @github/keytar.
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No lockfile is tracked at the pinned submodule commit, so `npm ci` cannot
+      # run here. This mirrors the project's Dockerfile: --omit=optional drops
+      # the git-URL @github/keytar optional dependency, --ignore-scripts skips
+      # its prebuild-install. No production dependency relies on install scripts.
+      - name: Install model_proxy_v3 dependencies
+        working-directory: submodules/model_proxy_v3
+        run: npm install --omit=optional --ignore-scripts
+
+      # A Node SEA embeds a copy of the Node that built it, so this cannot be
+      # cross-compiled: each runner builds its own host-triple binary. The script
+      # pins the official node@22 dist itself, since the Node on PATH (Homebrew's
+      # on macOS, the runner's on Windows) is not guaranteed to be a
+      # self-contained build, which the fuse injection requires.
+      - name: Build the model_proxy_v3 sidecar
+        working-directory: submodules/model_proxy_v3
+        run: npm run build:native
+
+      # tauri_build::build() copies externalBin from src-tauri/binaries during
+      # build.rs and errors if the file is missing, so this has to happen before
+      # any cargo command — clippy and test included.
+      - name: Stage the sidecar
+        run: |
+          triple="$(rustc --print host-tuple)"
+          # build-sea.js names its output after the host triple and appends .exe
+          # on Windows, and so does tauri-utils when it looks the externalBin up —
+          # but stage-sidecar.sh writes its destination without the extension.
+          # Passing the source explicitly (its auto-detect candidates miss
+          # submodules/) and fixing the destination up here keeps the script
+          # usable as-is; both branches turn into no-ops once it handles this.
+          src="submodules/model_proxy_v3/dist/model-proxy-v3-$triple"
+          dest="src-tauri/binaries/model-proxy-v3-$triple"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            src="$src.exe"
+          fi
+          bash scripts/stage-sidecar.sh "$src"
+          if [ "$RUNNER_OS" = "Windows" ] && [ ! -f "$dest.exe" ]; then
+            cp "$dest" "$dest.exe"
+          fi
+          ls -l src-tauri/binaries/
+
+      # --- checks ---------------------------------------------------------------
+
+      # Formatting is a property of the source, so one OS is enough.
+      - name: cargo fmt
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      # --- bundles --------------------------------------------------------------
+
+      - name: Build bundles
+        if: github.event_name != 'pull_request'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # proxy_tray has no root package.json and no @tauri-apps/cli dependency,
+          # so with this unset the action falls back to `npm install -g
+          # @tauri-apps/cli@v2`. Naming the runner keeps the CLI version ours.
+          tauriScript: npx --yes @tauri-apps/cli@^2
+          # Empty on push/workflow_dispatch: build the bundles without creating or
+          # touching a release. On a published release this is the tag the web UI
+          # just made, and the action attaches the bundles to it.
+          tagName: ${{ github.event.release.tag_name || '' }}
+
+      - name: Upload bundles
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-tray-${{ matrix.os }}
+          # The .app is deliberately not listed: upload-artifact does not preserve
+          # permissions or symlinks, so a .app comes back broken. The .dmg wraps
+          # it intact.
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
