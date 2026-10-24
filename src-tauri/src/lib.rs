@@ -366,12 +366,12 @@ async fn refresh_tray(app: &AppHandle, state: &Arc<ProxyState>) {
     };
 
     let mut payload = json!({
-            "running": status.is_running(),
-            "port": state.port,
-            "label": label,
-            "error": error,
-            "reloadError": reload_error,
-        });
+        "running": status.is_running(),
+        "port": state.port,
+        "label": label,
+        "error": error,
+        "reloadError": reload_error,
+    });
     if let Some(uptime) = uptime_ms {
         payload["uptimeMs"] = json!(uptime);
     }
@@ -516,8 +516,10 @@ fn spawn_proxy(app: AppHandle) -> Result<(), String> {
                         match rpc.call("status.get", json!({})).await {
                             Ok(result) => {
                                 let uptime_ms = result.get("uptimeMs").and_then(|v| v.as_u64());
-                                if let Some(version) = result.get("version").and_then(Value::as_str) {
-                                    *uptime_state.proxy_version.lock().unwrap() = Some(version.to_string());
+                                if let Some(version) = result.get("version").and_then(Value::as_str)
+                                {
+                                    *uptime_state.proxy_version.lock().unwrap() =
+                                        Some(version.to_string());
                                 }
                                 let _ = uptime_app.emit(
                                     "proxy://status",
@@ -883,8 +885,10 @@ async fn proxy_status(app: AppHandle) -> Result<Value, String> {
     );
     object.insert(
         "homeConfigPath".into(),
-        json!(dirs::home_dir()
-            .map(|home| home.join(HOME_CONFIG_RELATIVE).to_string_lossy().into_owned())),
+        json!(dirs::home_dir().map(|home| home
+            .join(HOME_CONFIG_RELATIVE)
+            .to_string_lossy()
+            .into_owned())),
     );
     object.insert(
         "reloadError".into(),
