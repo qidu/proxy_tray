@@ -192,8 +192,10 @@ Per platform, the job:
 1. Rewrites `git@github.com:` to `https://github.com/` globally, before checkout:
    `.gitmodules` declares the submodule over SSH and the runner has no key. The
    repository is public, so no secret is involved.
-2. Checks out with `submodules: true` — not `recursive`, since the five nested
-   submodules are unused here.
+2. Checks out **without** letting `actions/checkout` touch submodules, then runs
+   `git submodule update --init submodules/model_proxy_v3` itself, non-recursively
+   (see [Cloning](#cloning)). checkout's own submodule handling is recursive in
+   places it cannot be told not to be, and it is not needed here.
 3. Runs `npm install --omit=optional --ignore-scripts` and `npm run build:native`
    in the submodule. `npm ci` is impossible there: no lockfile is committed.
 4. Stages the sidecar, and on Windows adds the `.exe` suffix `stage-sidecar.sh`
@@ -360,19 +362,58 @@ transport is not involved. Initializing it therefore needs GitHub SSH auth; both
 repositories are public, so a redirect to HTTPS is the fallback:
 
 ```sh
-# fresh clone — put `-c url."https://github.com/".insteadOf="git@github.com:"`
+# fresh clone — recursion off; put `-c url."https://github.com/".insteadOf="git@github.com:"`
 # before `clone` if you have no SSH key
-git clone --recurse-submodules https://github.com/qidu/proxy_tray.git
+git clone --no-recurse-submodules https://github.com/qidu/proxy_tray.git
+git -C proxy_tray submodule update --init
 
 # existing clone
 git submodule update --init                                                            # with an SSH key
 git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init    # without
 ```
 
-`--init` is enough — not `--recursive`: `model_proxy_v3` has five nested
-submodules, but nothing built here imports them. `build-sea.js` marks exactly
-one external (`@github/keytar`), and every `submodules/` mention under `src/` is
-a comment.
+`git submodule update --init` is already non-recursive — `--recursive` is the flag
+that turns recursion *on*, and it is deliberately absent everywhere here. The same
+goes for `git clone`: plain `git clone` leaves the submodule alone, and
+`--recurse-submodules` is what would recurse. `model_proxy_v3` has five nested
+submodules, but nothing built here imports them: `build-sea.js` marks exactly one
+external (`@github/keytar`), and every `submodules/` mention under `src/` is a
+comment.
+
+### Wanting one of `model_proxy_v3`'s own submodules
+
+Nothing above needs them — the sidecar builds fine with all five uninitialized.
+If you want one anyway (`submodules/kompress`, `submodules/privacy-filter`, …),
+clone that repository **standalone** — a fresh checkout with no stale gitlink to
+trip over — and build its binary there, then hand the result to the staging step:
+
+```sh
+git clone https://github.com/qidu/model_proxy_v3.git   # or the git@ URL with a key
+cd model_proxy_v3
+git submodule update --init submodules/<name>          # name the path — see below
+npm install --omit=optional --ignore-scripts
+npm run build:native                                   # -> dist/model-proxy-v3-<triple>
+
+cd /path/to/proxy_tray
+bash scripts/stage-sidecar.sh "$PWD/../model_proxy_v3/dist/model-proxy-v3-$(rustc --print host-tuple)"
+```
+
+Two things that will otherwise cost you a `fatal`:
+
+- **Name the submodule path.** A bare `git submodule update --init` inside
+  `model_proxy_v3` aborts — `fatal: No url found for submodule path … in
+  .gitmodules` — because it enumerates *every* gitlink in the tree, and one of
+  them has no `.gitmodules` entry. Passing a path skips the enumeration, so
+  exactly the submodule you named is initialized. `--recursive` fails the same
+  way, for the same reason.
+- **All five of its submodules are declared over SSH**, so without a key add the
+  same redirect used above:
+  `git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init submodules/<name>`.
+
+`build:native` is host-only — SEA embeds the Node that runs it — so the binary
+suits the machine that built it and no other, same as the platform sequences
+above. On Windows `stage-sidecar.sh` writes the destination without the `.exe`
+Tauri appends, so copy the file by hand instead (see [How to build](#how-to-build)).
 
 ## Windows
 
@@ -415,7 +456,8 @@ which is the same on every platform.
 The SEA build excludes `@github/keytar`, so `store_key_in_system = true` falls
 back to the in-binary body store, which keeps keys in plaintext inside the
 executable and needs a writable directory. `sdk://` routes are also unsupported
-in the binary — the `chatjimmy` submodule is excluded (see `build-sea.js`).
+in the binary — the optional integration behind them is excluded too, and both
+fail soft at runtime (see `WHAT IS NOT IN THE BINARY` in `build-sea.js`).
 
 A start also ensures a Windows Defender inbound allow rule for the bundled
 `model-proxy-v3.exe` (`src-tauri/src/firewall.rs`), so a tray-launched proxy is

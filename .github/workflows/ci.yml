@@ -44,18 +44,41 @@ jobs:
 
       # model_proxy_v3 is public, but .gitmodules declares it over SSH
       # (git@github.com:...), which a runner has no key for. Rewrite to HTTPS
-      # before checkout so `submodules: true` can clone anonymously. Must come
-      # before actions/checkout.
+      # before the submodule is cloned below, so the clone needs no key.
       - name: Point SSH submodule URLs at HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
+      # Deliberately NOT `submodules: true`. actions/checkout's submodule block
+      # calls configureSubmoduleAuth(), whose first act is removeSubmoduleGitConfig()
+      # — a `git submodule foreach --recursive` (git-auth-helper.ts passes
+      # `--recursive` unconditionally, so `nestedSubmodules` cannot turn it off).
+      # That recursion descends into model_proxy_v3 and enumerates the
+      # `submodules/chatjimmy` gitlink, which upstream left in the tree when
+      # commit 1eb7770 deleted only its .gitmodules stanza. With no url to look
+      # up, git aborts the whole traversal — "No url found for submodule path
+      # 'submodules/model_proxy_v3/submodules/chatjimmy' in .gitmodules" — and
+      # fails the step even though the checkout itself succeeded. The trailing
+      # `|| :` in that command does not help: it guards the `sh -c` body, not the
+      # recursion. Fetching the one submodule we use, non-recursively, never
+      # looks at the stale gitlink at all.
       - name: Check out proxy_tray
         uses: actions/checkout@v4
-        with:
-          # Not `recursive`: nothing under src/ imports the four nested
-          # submodules (the submodules/ references there are comments), and
-          # build-sea.js marks exactly one external — @github/keytar.
-          submodules: true
+
+      # Fetch the one submodule we build, non-recursively: `--init` alone never
+      # looks at nested gitlinks, so the stale chatjimmy one is not consulted.
+      #
+      # The second command is the same stale gitlink, one phase later. checkout's
+      # *post* step runs cleanup() -> removeAuth() -> removeSsh()/removeToken(),
+      # each of which calls removeSubmoduleGitConfig() with recursion hardcoded
+      # true — and unlike the setup-phase calls it is not skipped, because by now
+      # this step has initialized model_proxy_v3. Dropping the dead gitlink from
+      # the submodule's index is exactly the one-commit fix upstream owes us
+      # (`git rm --cached submodules/chatjimmy`), done in the runner's workspace
+      # only. --ignore-unmatch keeps the step green once upstream lands it.
+      - name: Fetch model_proxy_v3
+        run: |
+          git submodule update --init submodules/model_proxy_v3
+          git -C submodules/model_proxy_v3 rm --cached -q --ignore-unmatch submodules/chatjimmy
 
       - uses: dtolnay/rust-toolchain@stable
         with:
