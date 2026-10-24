@@ -48,37 +48,18 @@ jobs:
       - name: Point SSH submodule URLs at HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-      # Deliberately NOT `submodules: true`. actions/checkout's submodule block
-      # calls configureSubmoduleAuth(), whose first act is removeSubmoduleGitConfig()
-      # — a `git submodule foreach --recursive` (git-auth-helper.ts passes
-      # `--recursive` unconditionally, so `nestedSubmodules` cannot turn it off).
-      # That recursion descends into model_proxy_v3 and enumerates the
-      # `submodules/chatjimmy` gitlink, which upstream left in the tree when
-      # commit 1eb7770 deleted only its .gitmodules stanza. With no url to look
-      # up, git aborts the whole traversal — "No url found for submodule path
-      # 'submodules/model_proxy_v3/submodules/chatjimmy' in .gitmodules" — and
-      # fails the step even though the checkout itself succeeded. The trailing
-      # `|| :` in that command does not help: it guards the `sh -c` body, not the
-      # recursion. Fetching the one submodule we use, non-recursively, never
-      # looks at the stale gitlink at all.
+      # Deliberately NOT `submodules: true`: checkout would then initialize
+      # every submodule recursively, and model_proxy_v3 carries five nested
+      # gitlinks (kompress, laya-mlx, node-keytar, openresponses, privacy-filter)
+      # that neither the sidecar build nor the tray needs. Fetching only the one
+      # submodule we do build keeps the checkout to a single clone.
       - name: Check out proxy_tray
         uses: actions/checkout@v4
 
-      # Fetch the one submodule we build, non-recursively: `--init` alone never
-      # looks at nested gitlinks, so the stale chatjimmy one is not consulted.
-      #
-      # The second command is the same stale gitlink, one phase later. checkout's
-      # *post* step runs cleanup() -> removeAuth() -> removeSsh()/removeToken(),
-      # each of which calls removeSubmoduleGitConfig() with recursion hardcoded
-      # true — and unlike the setup-phase calls it is not skipped, because by now
-      # this step has initialized model_proxy_v3. Dropping the dead gitlink from
-      # the submodule's index is exactly the one-commit fix upstream owes us
-      # (`git rm --cached submodules/chatjimmy`), done in the runner's workspace
-      # only. --ignore-unmatch keeps the step green once upstream lands it.
+      # Non-recursive on purpose: `--init` alone stops at model_proxy_v3 and
+      # never looks at the nested gitlinks above.
       - name: Fetch model_proxy_v3
-        run: |
-          git submodule update --init submodules/model_proxy_v3
-          git -C submodules/model_proxy_v3 rm --cached -q --ignore-unmatch submodules/chatjimmy
+        run: git submodule update --init submodules/model_proxy_v3
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -93,12 +74,21 @@ jobs:
           node-version: 22
 
       # No lockfile is tracked at the pinned submodule commit, so `npm ci` cannot
-      # run here. This mirrors the project's Dockerfile: --omit=optional drops
-      # the git-URL @github/keytar optional dependency, --ignore-scripts skips
-      # its prebuild-install. No production dependency relies on install scripts.
+      # run here. --ignore-scripts skips @github/keytar's prebuild-install, the
+      # only install script that would need a toolchain; the package itself is
+      # inert in this job — build-sea.js marks it --external and key-store.ts
+      # already converts its absence into a KeyStoreError (body-key-store.ts on
+      # Windows), exactly as it does in the Docker image.
+      #
+      # NOT --omit=optional, unlike the Dockerfile: esbuild ships its
+      # per-platform binary as an *optional* dependency of itself
+      # (@esbuild/darwin-arm64, @esbuild/win32-x64), so omitting optional deps
+      # leaves the esbuild JS shim on disk with no binary to exec and build:native
+      # dies with `The package "@esbuild/darwin-arm64" could not be found`.
+      # --ignore-scripts already covers what --omit=optional was there for.
       - name: Install model_proxy_v3 dependencies
         working-directory: submodules/model_proxy_v3
-        run: npm install --omit=optional --ignore-scripts
+        run: npm install --ignore-scripts
 
       # A Node SEA embeds a copy of the Node that built it, so this cannot be
       # cross-compiled: each runner builds its own host-triple binary. The script
