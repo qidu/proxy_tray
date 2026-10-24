@@ -322,7 +322,7 @@ async function loadModels() {
 function populateModelSelect() {
   const select = $('model-select');
   const currentValue = select.value;
-  select.innerHTML = '<option value="">Select a model…</option>';
+  select.innerHTML = '';
 
   for (const model of modelsCache) {
     const opt = document.createElement('option');
@@ -352,6 +352,9 @@ function updateOptionChecks() {
 
 /** Re-run the selection on this cadence while "Pin 300s" stays checked. */
 const PIN_INTERVAL_MS = 300_000;
+
+/** Maximum time (ms) to wait for a single model test before timing out. */
+const TEST_TIMEOUT_MS = 60_000;
 
 /** Set while a test pass is in flight so a pinned tick cannot overlap it. */
 let testingInProgress = false;
@@ -389,10 +392,15 @@ async function testSelectedModel() {
     }, 100);
 
     try {
-      const result = await invoke('rpc_call', {
+      // Race the model.test call against a 60s timeout
+      const testPromise = invoke('rpc_call', {
         method: 'model.test',
         params: { modelId }
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Test timeout (60s)')), TEST_TIMEOUT_MS)
+      );
+      const result = await Promise.race([testPromise, timeoutPromise]);
 
       clearInterval(timerInterval);
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -421,7 +429,10 @@ async function testSelectedModel() {
     } catch (err) {
       clearInterval(timerInterval);
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-      const msg = `✗ ${modelId}: ${err && err.message ? err.message : err} (${elapsedSec}s)`;
+      const isTimeout = err && err.message && err.message.includes('Test timeout');
+      const msg = isTimeout
+        ? `⏱ ${modelId}: Test timed out after 60s (${elapsedSec}s)`
+        : `✗ ${modelId}: ${err && err.message ? err.message : err} (${elapsedSec}s)`;
       allResults.push({ modelId, className: 'error', msg });
       resultEl.className = 'error';
       resultEl.textContent = msg;
@@ -461,8 +472,8 @@ function clearPin() {
 
 $('test-model').addEventListener('click', () => {
   if (pinTimer !== null) {
-    // Pressed while pinned: stop the repeat.
-    clearPin();
+    // Pressed while pinned: run a one-off test without affecting the pin.
+    testSelectedModel();
     return;
   }
   // Start pinned testing: run now, then repeat every 300s.
