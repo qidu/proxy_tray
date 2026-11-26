@@ -183,9 +183,11 @@ the web UI's **Create a new release** button, so publishing a release there
 builds the installers and attaches them without anything pushed by hand.
 
 Each runner builds its own sidecar, because a SEA binary is a copy of the Node
-that produced it and cannot be cross-compiled. `macos-latest` is arm64, so the
-macOS artifacts are arm64-only; an Intel or universal `.dmg` needs an Intel
-runner.
+that produced it and cannot be cross-compiled. The matrix builds separate Apple
+Silicon (`macos-latest`, `aarch64-apple-darwin`), Intel macOS (`macos-15-intel`,
+`x86_64-apple-darwin`), and Windows x64 (`windows-latest`,
+`x86_64-pc-windows-msvc`) bundles. There is no universal macOS binary because
+SEA cannot merge two Node runtimes into one sidecar.
 
 Per platform, the job:
 
@@ -196,15 +198,21 @@ Per platform, the job:
    `git submodule update --init submodules/model_proxy_v3` itself, non-recursively
    (see [Cloning](#cloning)). checkout's own submodule handling is recursive in
    places it cannot be told not to be, and it is not needed here.
-3. Runs `npm install --omit=optional --ignore-scripts` and `npm run build:native`
-   in the submodule. `npm ci` is impossible there: no lockfile is committed.
+3. Runs `npm install --ignore-scripts --no-audit --no-fund` and
+   `npm run build:native` in the submodule. `npm ci` is impossible there: no
+   lockfile is committed. Optional dependencies stay installed because esbuild's
+   platform binary is one; `--ignore-scripts` prevents native-addon install hooks.
 4. Stages the sidecar, and on Windows adds the `.exe` suffix `stage-sidecar.sh`
-   omits.
-5. Runs `cargo fmt --all --check` (macOS only — formatting is a property of the
-   source), `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
+   omits. It then checks the exact target-triple path and executes the sidecar,
+   requiring a real `status.get` response over the same JSON-RPC stdio transport
+   the tray uses.
+5. Runs `cargo fmt --all --check` (once, on the Apple Silicon leg — formatting is
+   a property of the source), `cargo clippy --all-targets -- -D warnings`, and
+   `cargo test`.
 6. On every event but a pull request, runs `tauri build` and uploads the `.dmg` /
-   `.msi` / `-setup.exe` as a workflow artifact; on a published release it also
-   attaches them to that release.
+   `.msi` / `-setup.exe` as a workflow artifact named
+   `proxy-tray-<target-triple>`; on a published release it also attaches them to
+   that release.
 
 The `.app` is uploaded only inside the `.dmg`: `upload-artifact` preserves
 neither permissions nor symlinks, so an extracted `.app` comes back broken.

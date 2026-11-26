@@ -24,15 +24,21 @@ jobs:
   # the real sidecar anyway (build.rs refuses to run without it), so splitting
   # would build the same ~120 MB SEA binary twice per runner.
   build:
-    name: build (${{ matrix.os }})
+    name: build (${{ matrix.triple }})
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is arm64, so this produces an arm64 app only. The sidecar
-        # cannot be cross-compiled (see below), which rules out a universal
-        # macOS bundle until an Intel runner is available again.
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        # Each runner builds the host SEA and tray bundle. The two macOS legs
+        # produce separate arm64 and Intel DMGs; SEA cannot make a universal binary.
+        include:
+          - runner: macos-latest
+            triple: aarch64-apple-darwin
+          - runner: macos-15-intel
+            triple: x86_64-apple-darwin
+          - runner: windows-latest
+            triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
     permissions:
       contents: write
     defaults:
@@ -55,6 +61,8 @@ jobs:
       # submodule we do build keeps the checkout to a single clone.
       - name: Check out proxy_tray
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Non-recursive on purpose: `--init` alone stops at model_proxy_v3 and
       # never looks at the nested gitlinks above.
@@ -88,7 +96,7 @@ jobs:
       # --ignore-scripts already covers what --omit=optional was there for.
       - name: Install model_proxy_v3 dependencies
         working-directory: submodules/model_proxy_v3
-        run: npm install --ignore-scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       # A Node SEA embeds a copy of the Node that built it, so this cannot be
       # cross-compiled: each runner builds its own host-triple binary. The script
@@ -122,11 +130,34 @@ jobs:
           fi
           ls -l src-tauri/binaries/
 
+      # The expected name also proves the host runner matches the matrix triple.
+      # A status.get reply exercises the packaged Node runtime and the tray's RPC
+      # transport, not merely the presence of a file.
+      - name: Verify the staged sidecar
+        run: |
+          expected="src-tauri/binaries/model-proxy-v3-${{ matrix.triple }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            expected="$expected.exe"
+          fi
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected staged sidecar $expected"
+            exit 1
+          fi
+          config="$RUNNER_TEMP/proxy-tray-ci-config.toml"
+          : > "$config"
+          response="$(printf '%s\n' '{"jsonrpc":"2.0","method":"status.get","params":{},"id":1}' | PORT=0 PROXY_CONFIG_PATH="$config" "$expected" --rpc)"
+          rm -f "$config"
+          printf '%s\n' "$response"
+          case "$response" in
+            *'"running":true'*) ;;
+            *) echo "::error::sidecar did not answer status.get"; exit 1 ;;
+          esac
+
       # --- checks ---------------------------------------------------------------
 
       # Formatting is a property of the source, so one OS is enough.
       - name: cargo fmt
-        if: runner.os == 'macOS'
+        if: matrix.triple == 'aarch64-apple-darwin'
         working-directory: src-tauri
         run: cargo fmt --all --check
 
@@ -159,7 +190,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: proxy-tray-${{ matrix.os }}
+          name: proxy-tray-${{ matrix.triple }}
           # The .app is deliberately not listed: upload-artifact does not preserve
           # permissions or symlinks, so a .app comes back broken. The .dmg wraps
           # it intact.
