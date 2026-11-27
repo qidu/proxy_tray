@@ -1,48 +1,64 @@
 #!/usr/bin/env bash
 #
-# Copies the built model-proxy-v3 SEA binary into src-tauri/binaries/ under the
-# target-triple name Tauri's `externalBin` requires.
-#
-# This is not optional busywork: tauri_build::build() copies externalBin during
-# build.rs and errors if the file is missing, so `cargo check` fails without it.
-#
-# Usage: bash scripts/stage-sidecar.sh [path-to-sea-binary]
+# Downloads the latest model-proxy-v3 release asset for this host and stages it
+# under the target-triple name Tauri's externalBin requires. Windows releases
+# also provide keytar.node and its license for Credential Vault support.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-TRIPLE="$(rustc --print host-tuple)"
-DEST="src-tauri/binaries/model-proxy-v3-$TRIPLE"
-
-if [ "$#" -ge 1 ]; then
-  SRC="$1"
-else
-  # Prefer the submodule's own build output, then the sibling checkout's — the
-  # submodule is a fresh clone, so its dist/ is usually empty. build-sea.js
-  # names the binary with the host triple already, so no rename is needed.
-  SRC=""
-  for candidate in \
-    "model_proxy_v3/dist/model-proxy-v3-$TRIPLE" \
-    "../model_proxy_v3/dist/model-proxy-v3-$TRIPLE"
-  do
-    if [ -f "$candidate" ]; then
-      SRC="$candidate"
-      break
-    fi
-  done
+if [ "$#" -ne 0 ]; then
+  echo "Usage: bash scripts/stage-sidecar.sh" >&2
+  exit 2
 fi
 
-if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
-  echo "stage-sidecar: no SEA binary found." >&2
-  echo "Build one first:" >&2
-  echo "  cd model_proxy_v3 && npm ci && npx --yes --package=node@26 node scripts/build-sea.js" >&2
-  echo "or pass a path: bash scripts/stage-sidecar.sh /path/to/model-proxy-v3-$TRIPLE" >&2
+TRIPLE="$(rustc --print host-tuple)"
+NAME="model-proxy-v3-$TRIPLE"
+BASE_URL="https://github.com/qidu/model_proxy_v3/releases/latest/download"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+case "$TRIPLE" in
+  *-pc-windows-msvc)
+    ASSET="$NAME.zip"
+    URL="$BASE_URL/$ASSET"
+    ARCHIVE="$WORK/$ASSET"
+    echo "Downloading $URL"
+    curl --fail --silent --show-error --location --http1.1 --retry 3 --retry-all-errors \
+      --output "$ARCHIVE" "$URL"
+    TAR="tar"
+    if [ -x "C:/Windows/System32/tar.exe" ]; then
+      TAR="C:/Windows/System32/tar.exe"
+    fi
+    "$TAR" -xf "$ARCHIVE" -C "$WORK" "$NAME.exe" keytar.node keytar-LICENSE.md
+    SRC="$WORK/$NAME.exe"
+    DEST="src-tauri/binaries/$NAME.exe"
+    ;;
+  *)
+    ASSET="$NAME"
+    URL="$BASE_URL/$ASSET"
+    SRC="$WORK/$ASSET"
+    DEST="src-tauri/binaries/$NAME"
+    echo "Downloading $URL"
+    curl --fail --silent --show-error --location --http1.1 --retry 3 --retry-all-errors \
+      --output "$SRC" "$URL"
+    ;;
+esac
+
+if [ ! -s "$SRC" ]; then
+  echo "stage-sidecar: downloaded executable is missing or empty: $SRC" >&2
   exit 1
 fi
 
 mkdir -p "$(dirname "$DEST")"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"
+
+if [[ "$TRIPLE" == *-pc-windows-msvc ]]; then
+  cp "$WORK/keytar.node" src-tauri/binaries/keytar.node
+  cp "$WORK/keytar-LICENSE.md" src-tauri/binaries/keytar-LICENSE.md
+  echo "staged $WORK/keytar.node -> src-tauri/binaries/keytar.node"
+fi
 
 echo "staged $SRC -> $DEST"

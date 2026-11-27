@@ -22,14 +22,14 @@ env:
 jobs:
   # One job per OS rather than a lint job plus a bundle job: every path here needs
   # the real sidecar anyway (build.rs refuses to run without it), so splitting
-  # would build the same ~120 MB SEA binary twice per runner.
+  # would download the same ~120 MB SEA binary twice per runner.
   build:
     name: build (${{ matrix.triple }})
     strategy:
       fail-fast: false
       matrix:
-        # Each runner builds the host SEA and tray bundle. The two macOS legs
-        # produce separate arm64 and Intel DMGs; SEA cannot make a universal binary.
+        # Each runner downloads the host SEA and builds the tray bundle. The two
+        # macOS legs produce separate arm64 and Intel DMGs.
         include:
           - runner: macos-latest
             triple: aarch64-apple-darwin
@@ -48,26 +48,8 @@ jobs:
     steps:
       # --- sidecar prerequisites ------------------------------------------------
 
-      # model_proxy_v3 is public, but .gitmodules declares it over SSH
-      # (git@github.com:...), which a runner has no key for. Rewrite to HTTPS
-      # before the submodule is cloned below, so the clone needs no key.
-      - name: Point SSH submodule URLs at HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-      # Deliberately NOT `submodules: true`: checkout would then initialize
-      # every submodule recursively, and model_proxy_v3 carries five nested
-      # gitlinks (kompress, laya-mlx, node-keytar, openresponses, privacy-filter)
-      # that neither the sidecar build nor the tray needs. Fetching only the one
-      # submodule we do build keeps the checkout to a single clone.
       - name: Check out proxy_tray
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Non-recursive on purpose: `--init` alone stops at model_proxy_v3 and
-      # never looks at the nested gitlinks above.
-      - name: Fetch model_proxy_v3
-        run: git submodule update --init submodules/model_proxy_v3
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -81,53 +63,12 @@ jobs:
         with:
           node-version: 22
 
-      # No lockfile is tracked at the pinned submodule commit, so `npm ci` cannot
-      # run here. --ignore-scripts skips @github/keytar's prebuild-install, the
-      # only install script that would need a toolchain; the package itself is
-      # inert in this job — build-sea.js marks it --external and key-store.ts
-      # already converts its absence into a KeyStoreError (body-key-store.ts on
-      # Windows), exactly as it does in the Docker image.
-      #
-      # NOT --omit=optional, unlike the Dockerfile: esbuild ships its
-      # per-platform binary as an *optional* dependency of itself
-      # (@esbuild/darwin-arm64, @esbuild/win32-x64), so omitting optional deps
-      # leaves the esbuild JS shim on disk with no binary to exec and build:native
-      # dies with `The package "@esbuild/darwin-arm64" could not be found`.
-      # --ignore-scripts already covers what --omit=optional was there for.
-      - name: Install model_proxy_v3 dependencies
-        working-directory: submodules/model_proxy_v3
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      # A Node SEA embeds a copy of the Node that built it, so this cannot be
-      # cross-compiled: each runner builds its own host-triple binary. The script
-      # pins the official node@22 dist itself, since the Node on PATH (Homebrew's
-      # on macOS, the runner's on Windows) is not guaranteed to be a
-      # self-contained build, which the fuse injection requires.
-      - name: Build the model_proxy_v3 sidecar
-        working-directory: submodules/model_proxy_v3
-        run: npm run build:native
-
-      # tauri_build::build() copies externalBin from src-tauri/binaries during
-      # build.rs and errors if the file is missing, so this has to happen before
-      # any cargo command — clippy and test included.
-      - name: Stage the sidecar
+      # The staging script selects the latest published asset for the host triple.
+      # On Windows it also extracts keytar.node and its license from the ZIP.
+      # tauri_build::build() requires these files before any cargo command.
+      - name: Download and stage the model_proxy_v3 release
         run: |
-          triple="$(rustc --print host-tuple)"
-          # build-sea.js names its output after the host triple and appends .exe
-          # on Windows, and so does tauri-utils when it looks the externalBin up —
-          # but stage-sidecar.sh writes its destination without the extension.
-          # Passing the source explicitly (its auto-detect candidates miss
-          # submodules/) and fixing the destination up here keeps the script
-          # usable as-is; both branches turn into no-ops once it handles this.
-          src="submodules/model_proxy_v3/dist/model-proxy-v3-$triple"
-          dest="src-tauri/binaries/model-proxy-v3-$triple"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            src="$src.exe"
-          fi
-          bash scripts/stage-sidecar.sh "$src"
-          if [ "$RUNNER_OS" = "Windows" ] && [ ! -f "$dest.exe" ]; then
-            cp "$dest" "$dest.exe"
-          fi
+          bash scripts/stage-sidecar.sh
           ls -l src-tauri/binaries/
 
       # The expected name also proves the host runner matches the matrix triple.
@@ -142,6 +83,14 @@ jobs:
           if [ ! -f "$expected" ]; then
             echo "::error::expected staged sidecar $expected"
             exit 1
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            for companion in keytar.node keytar-LICENSE.md; do
+              if [ ! -s "src-tauri/binaries/$companion" ]; then
+                echo "::error::missing or empty Windows companion: $companion"
+                exit 1
+              fi
+            done
           fi
           config="$RUNNER_TEMP/proxy-tray-ci-config.toml"
           : > "$config"
